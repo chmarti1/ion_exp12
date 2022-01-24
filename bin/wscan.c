@@ -2,6 +2,8 @@
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
+#include <errno.h>
+#include <string.h>
 
 
 #define CONFIG_DEFAULT  "wscan.conf"
@@ -62,11 +64,12 @@ int main(int argc, char *argv[]){
         err,            // error index
         xdir_dioch,     // LabJack DIO channel for the x-direction bit
         xstep,          // grid increment in pulses
+        xstep_u,        // unsigned grid increment in pulses
         xn,             // number of grid nodes
         xi,             // x grid index
-        xd,             // x direction state. The x-direction will reverse after each z-plane
         zdir_dioch,     // LabJack DIO channel for the z-direction bit
         zstep,          // grid increment in pulses
+        zstep_u,        // unsigned grid increment in pulses
         zn,             // number of grid nodes
         zi,             // z grid index
         file_counter;   // index for generating file names
@@ -81,8 +84,10 @@ int main(int argc, char *argv[]){
     config_filename[0] = '\0';
     dest_directory[0] = '\0';
     
+printf("A\n");
+    
     // Parse the options
-    while((ch = getopt(argc, argv, "hc:d:") >= 0){
+    while((ch = getopt(argc, argv, "hc:d:")) >= 0){
         switch(ch){
         case 'h':
             printf(help_text);
@@ -91,7 +96,7 @@ int main(int argc, char *argv[]){
             strcpy(config_filename, optarg);
         break;
         case 'd':
-            strcpy(dest_filename, optarg);
+            strcpy(dest_directory, optarg);
         break;
         default:
             fprintf(stderr, "WSCAN: Unrecognized option %c\n", (char) ch);
@@ -100,26 +105,28 @@ int main(int argc, char *argv[]){
         }
     }
     
+printf("B\n");
+    
     // If the configuration file is not specified, use the default
-    if(!config_file[0])
+    if(!config_filename[0])
         strcpy(config_filename, CONFIG_DEFAULT);
     // If the destination directory is not specified, build one from the timestamp
     if(!dest_directory[0]){
         time(&now);
-        strftime(dest_directory, STR_LEN, localtime(now), "%04Y%02m%02d%02H%02M%02S");
+        strftime(dest_directory, STR_LEN, "%04Y%02m%02d%02H%02M%02S", localtime(&now));
     }
     // Load the configuration file.
-    if(lc_load_config(&dconf, 1, config_file))
+    if(lc_load_config(&dconf, 1, config_filename))
         return -1;
         
     // Verify the extended feature channels
     if(dconf.nefch < 2){
-        fprintf(stderr, "WSCAN: Requires two extended feature channels, found %d\n", dev.nefch);
+        fprintf(stderr, "WSCAN: Requires two extended feature channels, found %d\n", dconf.nefch);
         return -1;
-    }else if(dev.efch[0].signal != LC_EF_COUNT || dev.efch[0].direction != LC_EF_OUTPUT){
+    }else if(dconf.efch[0].signal != LC_EF_COUNT || dconf.efch[0].direction != LC_EF_OUTPUT){
         fprintf(stderr, "WSCAN: The first EF channel was not a COUNT output.\n");
         return -1;
-    }else if(dev.efch[1].signal != LC_EF_COUNT || dev.efch[1].direction != LC_EF_OUTPUT){
+    }else if(dconf.efch[1].signal != LC_EF_COUNT || dconf.efch[1].direction != LC_EF_OUTPUT){
         fprintf(stderr, "WSCAN: The second EF channel was not a COUNT output.\n");
         return -1;
     }
@@ -127,6 +134,8 @@ int main(int argc, char *argv[]){
     // Establish the direction channel numbers as next to their corresponding pulse channels
     xdir_dioch = dconf.efch[XPULSE_EF].channel + 1;
     zdir_dioch = dconf.efch[ZPULSE_EF].channel + 1;
+    
+printf("C\n");
     
     // Retrieve meta parameters
     if(     lc_get_meta_int(&dconf, "xstep", &xstep) ||
@@ -141,6 +150,8 @@ int main(int argc, char *argv[]){
         return -1;
     }
     
+printf("D\n");
+    
     // Open the device connection
     if(lc_open(&dconf)){
         fprintf(stderr, "WSCAN: Failed to open the device connection.\n");
@@ -149,14 +160,16 @@ int main(int argc, char *argv[]){
     // Upload the device configuration
     if(lc_upload_config(&dconf)){
         fprintf(stderr, "WSCAN: Configuration upload failed.\n");
-        lc_close(&dev);
+        lc_close(&dconf);
         return -1;
     }
+    
+printf("E\n");
     
     // If the target directory does not exist, then create it
     err = stat(dest_directory, &dirstat);
     // If the directory doesn't exist, create it
-    if(err == ENOENT){
+    if(err){
         if(mkdir(dest_directory, 0755)){
             fprintf(stderr, "WSCAN: Failed to create directory: %s\n", dest_directory);
             lc_close(&dconf);
@@ -170,7 +183,7 @@ int main(int argc, char *argv[]){
     // If the directory already exists, warn the user
     }else{
         fprintf(stderr, "WSCAN: WARNING! The destination directory already exists: %s\n", dest_directory);
-        ch = "?";
+        ch = '?';
         while(ch != 'Y'){
             printf("Overwrite existing data?  (Y/n):");
             scanf("%c", (char*) &ch);
@@ -185,31 +198,46 @@ int main(int argc, char *argv[]){
         }
     }
     
+printf("F\n");
+    
     // Set the direction bits to be outputs
     err = LJM_eWriteName(dconf.handle, "DIO_DIRECTION", 1<<xdir_dioch | 1<<zdir_dioch);
     
-    // Initialize the direction bits and force the steps to be positive
-    xd = XDIR_POS;
-    if(xstep < 0){
-        xd = !XDIR_POS;
-        xstep = -xstep;
-    }
+    // The step sign will swap after each z-plane scan.  xstep_u will 
+    // store the positive number of pulses to send to the motor, regardless
+    // of direction.  Meanwhile, initialize the hardware pins for the 
+    // correct direction.
     sprintf(stemp, "DIO%d", xdir_dioch);
-    err = err ? err : LJM_eWriteName(dconf.handle, stemp, xd);
-    
-    if(zstep < 0){
-        sprintf(stemp, "DIO%d", zdir_dioch);
-        err = err ? err : LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);
-        zstep = -zstep;
+    if(xstep < 0){
+        xstep_u = -xstep;
+        err = err ? err : LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
     }else{
-        sprintf(stemp, "DIO%d", zdir_dioch);
+        xstep_u = xstep;
+        err = err ? err : LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
+    }
+
+    sprintf(stemp, "DIO%d", zdir_dioch);        
+    if(zstep < 0){
+        zstep_u = -zstep;
+        err = err ? err : LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);        
+    }else{
+        zstep_u = zstep;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
     }
+    
+printf("G\n");
+    
+    dconf.efch[0].counts = xstep_u;
+    dconf.efch[1].counts = zstep_u;
+    lc_update_ef(&dconf);
+    
     if(err){
         fprintf(stderr, "WSCAN: Failed to set the motor direction pins. Aborting\n");
         lc_close(&dconf);
         return -1;
     }
     
+    
+    lc_close(&dconf);
     return 0;
 }
