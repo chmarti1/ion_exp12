@@ -13,6 +13,8 @@
 #define ZPULSE_EF       1
 #define XDIR_POS        1
 #define ZDIR_POS        1
+#define TSETTLE_US      100000  // Time for mechanical vibration to settle before taking data
+
 
 
 char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] \n"\
@@ -64,27 +66,27 @@ int main(int argc, char *argv[]){
         err,            // error index
         xdir_dioch,     // LabJack DIO channel for the x-direction bit
         xstep,          // grid increment in pulses
-        xstep_u,        // unsigned grid increment in pulses
+        xdir,           // +1 or -1 depending
         xn,             // number of grid nodes
         xi,             // x grid index
+        xwaitus,        // Time for x motion in microseconds
         zdir_dioch,     // LabJack DIO channel for the z-direction bit
         zstep,          // grid increment in pulses
-        zstep_u,        // unsigned grid increment in pulses
+        zdir,           // +1 or -1 depending
         zn,             // number of grid nodes
         zi,             // z grid index
+        zwaitus,        // Time fo z motion in microseconds
         file_counter;   // index for generating file names
     char config_filename[STR_LEN], 
         dest_directory[STR_LEN],
         stemp[STR_SHORT];
-        
+    
     time_t now;
     struct stat dirstat;
     lc_devconf_t dconf;
     
     config_filename[0] = '\0';
     dest_directory[0] = '\0';
-    
-printf("A\n");
     
     // Parse the options
     while((ch = getopt(argc, argv, "hc:d:")) >= 0){
@@ -104,9 +106,7 @@ printf("A\n");
         break;
         }
     }
-    
-printf("B\n");
-    
+
     // If the configuration file is not specified, use the default
     if(!config_filename[0])
         strcpy(config_filename, CONFIG_DEFAULT);
@@ -134,9 +134,7 @@ printf("B\n");
     // Establish the direction channel numbers as next to their corresponding pulse channels
     xdir_dioch = dconf.efch[XPULSE_EF].channel + 1;
     zdir_dioch = dconf.efch[ZPULSE_EF].channel + 1;
-    
-printf("C\n");
-    
+
     // Retrieve meta parameters
     if(     lc_get_meta_int(&dconf, "xstep", &xstep) ||
             lc_get_meta_int(&dconf, "xn", &xn) ||
@@ -149,9 +147,7 @@ printf("C\n");
         fprintf(stderr, "WSCAN: xn and zn must be positive. Found: xn=%d zn=%d\n", xn, zn);
         return -1;
     }
-    
-printf("D\n");
-    
+
     // Open the device connection
     if(lc_open(&dconf)){
         fprintf(stderr, "WSCAN: Failed to open the device connection.\n");
@@ -163,9 +159,7 @@ printf("D\n");
         lc_close(&dconf);
         return -1;
     }
-    
-printf("E\n");
-    
+
     // If the target directory does not exist, then create it
     err = stat(dest_directory, &dirstat);
     // If the directory doesn't exist, create it
@@ -197,45 +191,106 @@ printf("E\n");
             }
         }
     }
-    
-printf("F\n");
-    
+
     // Set the direction bits to be outputs
     err = LJM_eWriteName(dconf.handle, "DIO_DIRECTION", 1<<xdir_dioch | 1<<zdir_dioch);
     
-    // The step sign will swap after each z-plane scan.  xstep_u will 
-    // store the positive number of pulses to send to the motor, regardless
-    // of direction.  Meanwhile, initialize the hardware pins for the 
-    // correct direction.
+    // Initialize the direction of motion based on the x- and z-step 
+    // signs.  We will force the step sizes to be positive, but the 
+    // hardware pins should be set appropriately, and we'll initialize
+    // the xi and zi indices to be at their maximum or minimum based
+    // on the initial direction of motion.  This is especially important
+    // for the x-direction, since it will reverse itself after each 
+    // plane.
     sprintf(stemp, "DIO%d", xdir_dioch);
     if(xstep < 0){
-        xstep_u = -xstep;
+        xstep = -xstep;
+        xdir = -1;
+        xi = xn-1;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
     }else{
-        xstep_u = xstep;
+        xdir = 1;
+        xi = 0;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
     }
 
     sprintf(stemp, "DIO%d", zdir_dioch);        
     if(zstep < 0){
-        zstep_u = -zstep;
+        zstep = -zstep;
+        zdir = -1;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);        
     }else{
-        zstep_u = zstep;
+        zdir = 1;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
     }
     
-printf("G\n");
-    
-    dconf.efch[0].counts = xstep_u;
-    dconf.efch[1].counts = zstep_u;
-    lc_update_ef(&dconf);
-    
     if(err){
-        fprintf(stderr, "WSCAN: Failed to set the motor direction pins. Aborting\n");
+        fprintf(stderr, "WSCAN: Failed to initialize the motor direction pins. Aborting\n");
         lc_close(&dconf);
         return -1;
     }
+    
+    // Calculate wait times
+    xwaitus = xstep * 1e6 / dconf.effrequency + TSETTLE_US;
+    zwaitus = zstep * 1e6 / dconf.effrequency + TSETTLE_US;
+    
+    // Loop through the entire grid array
+    // An out-of-bounds check is necessary to decide whether to command
+    // movement and whether to jump out of the loop.  To eliminate 
+    // redundant
+    // z-loop
+    while(1){
+        // x-loop
+        while(1){
+            //
+            // Take data
+            //
+            printf("%d,%d\n", xi,zi);
+            
+            xi += xdir;
+            // Will the motion put the axis out-of-range?
+            if(xi<0 || xi>=xn){
+                // Undo the index increment and jump out of the loop
+                xi -= xdir;
+                break;
+            }
+            // Command x-motion
+            dconf.efch[XPULSE_EF].counts = xstep;
+            lc_update_ef(&dconf);
+            usleep(xwaitus);
+        }
+        // Each time a pass along the x-axis is complete, teverse the 
+        // direction of motion
+        xdir = -xdir;
+        sprintf(stemp, "DIO%d", xdir_dioch);
+        if(xdir>0)
+            err = LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
+        else
+            err = LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
+            
+        if(err){
+            fprintf(stderr, "WSCAN: Failed to set x-direction pin while scanning!\n");
+            lc_close(&dconf);
+            return -1;
+        }
+        
+        zi += zdir;
+        // Will the motion put the axis out-of-range?
+        if(zi<0 || zi>=zn){
+            // Undo the index increment and jump out of the loop
+            zi -= zdir;
+            break;
+        }
+        // Command z-motion
+        dconf.efch[ZPULSE_EF].counts = zstep;
+        lc_update_ef(&dconf);
+        usleep(zwaitus);
+    }
+    
+    dconf.efch[0].counts = xstep;
+    dconf.efch[1].counts = zstep;
+    lc_update_ef(&dconf);
+    
     
     
     lc_close(&dconf);
