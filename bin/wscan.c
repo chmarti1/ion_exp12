@@ -79,11 +79,14 @@ int main(int argc, char *argv[]){
         file_counter;   // index for generating file names
     char config_filename[STR_LEN], 
         dest_directory[STR_LEN],
+        filename[STR_LEN],
         stemp[STR_SHORT];
     
     time_t now;
     struct stat dirstat;
     lc_devconf_t dconf;
+    FILE *fd;
+    
     
     config_filename[0] = '\0';
     dest_directory[0] = '\0';
@@ -242,10 +245,42 @@ int main(int argc, char *argv[]){
     while(1){
         // x-loop
         while(1){
-            //
-            // Take data
-            //
-            printf("%d,%d\n", xi,zi);
+            // Let the user know what's going on
+            printf("xi = %d (%d), zi = %d (%d)\n", xi, xn, zi, zn);
+            
+            // Read data in a burst configuration: start, service, stop
+            if(lc_stream_start(&dconf, -1)){
+                fprintf(stderr, "WSCAN: Failed to start data stream. Aborting\n");
+                lc_close(&dconf);
+                return -1;
+            }
+            // Keep going until the collection is complete
+            while( !lc_stream_iscomplete(&dconf) ){
+                if(lc_stream_service(&dconf)){
+                    fprintf(stderr, "WSCAN: Unexpected error while streaming data. Aborting\n");
+                    lc_stream_stop(&dconf);
+                    lc_close(&dconf);
+                    return -1;
+                }
+            }
+            lc_stream_stop(&dconf);
+            
+            // construct the file name and open it.  Only write if the 
+            // open operation is complete.
+            sprintf(filename, "%s/%03d_%03d.dat", dest_directory, xi, zi);            
+            fd = fopen(filename, "wb");
+            if(fd){
+                // Write the data file
+                lc_datafile_init(&dconf, fd);
+                while( !lc_stream_isempty(&dconf) )
+                    lc_datafile_write(&dconf, fd);
+                fclose(fd);
+                fd = NULL;
+            }else{
+                fprintf(stderr, "WSCAN: WARNING: Failed to create file: %s\n    The data were lost!\n", filename);
+            }
+            lc_stream_clean(&dconf);
+            
             
             xi += xdir;
             // Will the motion put the axis out-of-range?
@@ -264,6 +299,7 @@ int main(int argc, char *argv[]){
         xdir = -xdir;
         sprintf(stemp, "DIO%d", xdir_dioch);
         if(xdir>0)
+        
             err = LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
         else
             err = LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
@@ -286,12 +322,6 @@ int main(int argc, char *argv[]){
         lc_update_ef(&dconf);
         usleep(zwaitus);
     }
-    
-    dconf.efch[0].counts = xstep;
-    dconf.efch[1].counts = zstep;
-    lc_update_ef(&dconf);
-    
-    
     
     lc_close(&dconf);
     return 0;

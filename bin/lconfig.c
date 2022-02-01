@@ -2281,6 +2281,10 @@ int lc_upload_config(lc_devconf_t* dconf){
                 err = err ? err : LJM_eWriteName(handle, stemp, 1);
             // Pulse output
             }else{
+                // First, force the pin to be low at the resting state
+                sprintf(stemp, "DIO%d", dconf->efch[efnum].channel);
+                err = err ? err : LJM_eWriteName(handle, stemp, 0);
+                
                 // Calculate the start and stop indices first...
                 // Unwrap the phase first (lazy method)
                 while(dconf->efch[efnum].phase>=360.)
