@@ -17,7 +17,7 @@
 
 
 
-char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] \n"\
+char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 "  Conducts an ion density scan of a region in space by alternatively\n"\
 "commanding motion of the spinning disc Langmuir probe and collecting\n"\
 "data.  The data acquisition process is configured in an LCONFIG file\n"\
@@ -58,6 +58,18 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] \n"\
 "will be created using the timestamp, but if this argument is present, it\n"\
 "will be used instead.\n"\
 "\n"\
+"-i\n"\
+"-f\n"\
+"-s\n"\
+"  Inserts a meta parameter from the command line. The flag 'i', 'f', or \n"\
+"'s' identifies the data type as integer, float, or string respectively.\n"\
+"The following parameter specifies both the parameter name and its value\n"\
+"split by the '=' character. For example,\n"\
+"    -i index=12 -s name=Chris\n"\
+"specifies a meta integer named \"index\" and a meta string named \"name\".\n"\
+"These will be inserted into the data files whether or not they were in the\n"\
+"original configuration file.\n"\
+"\n"\
 "(c)2022  Christopher R. Martin\n";
 
 
@@ -80,7 +92,10 @@ int main(int argc, char *argv[]){
     char config_filename[STR_LEN], 
         dest_directory[STR_LEN],
         filename[STR_LEN],
-        stemp[STR_SHORT];
+        stemp[STR_SHORT],
+        stemp1[STR_SHORT];
+    double ftemp;
+    int itemp;
     
     time_t now;
     struct stat dirstat;
@@ -92,7 +107,7 @@ int main(int argc, char *argv[]){
     dest_directory[0] = '\0';
     
     // Parse the options
-    while((ch = getopt(argc, argv, "hc:d:")) >= 0){
+    while((ch = getopt(argc, argv, "hc:d:i:s:f:")) >= 0){
         switch(ch){
         case 'h':
             printf(help_text);
@@ -102,6 +117,11 @@ int main(int argc, char *argv[]){
         break;
         case 'd':
             strcpy(dest_directory, optarg);
+        break;
+        case 'i':
+        case 's':
+        case 'f':
+            // Do nothing; we'll handle these later
         break;
         default:
             fprintf(stderr, "WSCAN: Unrecognized option %c\n", (char) ch);
@@ -121,6 +141,51 @@ int main(int argc, char *argv[]){
     // Load the configuration file.
     if(lc_load_config(&dconf, 1, config_filename))
         return -1;
+        
+        
+    // Go back and apply any meta configuration parameters
+    optind = 1;
+    while((ch = getopt(argc, argv, "hc:d:i:s:f:")) >= 0){
+        switch(ch){
+        case 'h':
+        case 'c':
+        case 'd':
+            // These have already been dealt with
+        break;
+        case 'i':
+            if(sscanf(optarg, "%[^=]=%d", &stemp, &itemp) != 2){
+                fprintf(stderr, "WSCAN: Failed to parse integer meta argument: %s\n", optarg);
+                lc_close(&dconf);
+                return -1;
+            }
+            if(lc_put_meta_int(&dconf, stemp, itemp)){
+                fprintf(stderr, "WSCAN: WARNING! Failed to set integer parameter, %s=%d\n", stemp, itemp); 
+            }
+        break;
+        case 's':
+            if(sscanf(optarg, "%[^=]=%s", &stemp, &stemp1) != 2){
+                fprintf(stderr, "WSCAN: Failed to parse string meta argument: %s\n", optarg);
+                return -1;
+            }
+            if(lc_put_meta_str(&dconf, stemp, stemp1)){
+                fprintf(stderr, "WSCAN: WARNING! Failed to set string parameter, %s=%s\n", stemp, stemp1);
+            }
+        break;
+        case 'f':
+            if(sscanf(optarg, "%[^=]=%f", &stemp, &ftemp) != 2){
+                fprintf(stderr, "WSCAN: Failed to parse float meta argument: %s\n", optarg);
+                return -1;
+            }
+            if(lc_put_meta_flt(&dconf, stemp, ftemp)){
+                fprintf(stderr, "WSCAN: WARNING! Failed to set float parameter, %s=%f\n", stemp, ftemp);
+            }
+        break;
+        default:
+            fprintf(stderr, "WSCAN: Unexpected condition! Unrecognized option %c\n", (char) ch);
+            return -1;
+        break;
+        }
+    }    
         
     // Verify the extended feature channels
     if(dconf.nefch < 2){
@@ -247,6 +312,10 @@ int main(int argc, char *argv[]){
         while(1){
             // Let the user know what's going on
             printf("xi = %d (%d), zi = %d (%d)\n", xi, xn, zi, zn);
+            // Record the current z and x indices
+            if(lc_put_meta_int(&dconf, "xi", xi) || lc_put_meta_int(&dconf, "zi", zi)){
+                fprintf(stderr, "WSCAN: WARNING! Failed to write the xi or zi meta values prior to data acquisition\n");
+            }
             
             // Read data in a burst configuration: start, service, stop
             if(lc_stream_start(&dconf, -1)){
