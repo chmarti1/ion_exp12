@@ -81,12 +81,14 @@ int main(int argc, char *argv[]){
         xdir,           // +1 or -1 depending
         xn,             // number of grid nodes
         xi,             // x grid index
+        x0,             // x start location
         xwaitus,        // Time for x motion in microseconds
         zdir_dioch,     // LabJack DIO channel for the z-direction bit
         zstep,          // grid increment in pulses
         zdir,           // +1 or -1 depending
         zn,             // number of grid nodes
         zi,             // z grid index
+        z0,             // z start location
         zwaitus,        // Time fo z motion in microseconds
         file_counter;   // index for generating file names
     char config_filename[STR_LEN], 
@@ -153,7 +155,7 @@ int main(int argc, char *argv[]){
             // These have already been dealt with
         break;
         case 'i':
-            if(sscanf(optarg, "%[^=]=%d", &stemp, &itemp) != 2){
+            if(sscanf(optarg, "%[^=]=%d", stemp, &itemp) != 2){
                 fprintf(stderr, "WSCAN: Failed to parse integer meta argument: %s\n", optarg);
                 lc_close(&dconf);
                 return -1;
@@ -163,7 +165,7 @@ int main(int argc, char *argv[]){
             }
         break;
         case 's':
-            if(sscanf(optarg, "%[^=]=%s", &stemp, &stemp1) != 2){
+            if(sscanf(optarg, "%[^=]=%s", stemp, stemp1) != 2){
                 fprintf(stderr, "WSCAN: Failed to parse string meta argument: %s\n", optarg);
                 return -1;
             }
@@ -172,7 +174,7 @@ int main(int argc, char *argv[]){
             }
         break;
         case 'f':
-            if(sscanf(optarg, "%[^=]=%f", &stemp, &ftemp) != 2){
+            if(sscanf(optarg, "%[^=]=%lf", stemp, &ftemp) != 2){
                 fprintf(stderr, "WSCAN: Failed to parse float meta argument: %s\n", optarg);
                 return -1;
             }
@@ -286,9 +288,11 @@ int main(int argc, char *argv[]){
     if(zstep < 0){
         zstep = -zstep;
         zdir = -1;
+        zi = zn-1;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);        
     }else{
         zdir = 1;
+        zi = 0;
         err = err ? err : LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
     }
     
@@ -297,6 +301,10 @@ int main(int argc, char *argv[]){
         lc_close(&dconf);
         return -1;
     }
+    
+    // Log the starting locations. We will return to here later
+    x0 = xi;
+    z0 = zi;
     
     // Calculate wait times
     xwaitus = xstep * 1e6 / dconf.effrequency + TSETTLE_US;
@@ -368,7 +376,6 @@ int main(int argc, char *argv[]){
         xdir = -xdir;
         sprintf(stemp, "DIO%d", xdir_dioch);
         if(xdir>0)
-        
             err = LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
         else
             err = LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
@@ -392,6 +399,31 @@ int main(int argc, char *argv[]){
         usleep(zwaitus);
     }
     
+    // Finally, calculate the steps to move back to the origin
+    
+    // Set the appropriate direction and move
+    sprintf(stemp, "DIO%d", xdir_dioch);
+    if(x0 >= xi){
+        dconf.efch[XPULSE_EF].counts = (x0 - xi)*xstep;
+        LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
+    }else{
+        dconf.efch[XPULSE_EF].counts = (xi - x0)*xstep;
+        LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
+    }
+    
+    sprintf(stemp, "DIO%d", zdir_dioch);
+    if(z0 >= zi){
+        dconf.efch[XPULSE_EF].counts = (z0 - zi)*zstep;
+        LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
+    }else{
+        dconf.efch[XPULSE_EF].counts = (zi - z0)*zstep;
+        LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);
+    }
+    
+    lc_update_ef(&dconf);
+    
     lc_close(&dconf);
     return 0;
 }
+
+
