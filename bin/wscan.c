@@ -205,7 +205,11 @@ int main(int argc, char *argv[]){
     xdir_dioch = dconf.efch[XPULSE_EF].channel + 1;
     zdir_dioch = dconf.efch[ZPULSE_EF].channel + 1;
 
-    // Retrieve meta parameters
+    // Retrieve mandatory meta parameters
+    //   These define an x,z grid of probe locations to scan.
+    // xstep and zstep are the number of stepper motor steps to move
+    // between grid locations.  xn and zn are the number of grid 
+    // locations for each.
     if(     lc_get_meta_int(&dconf, "xstep", &xstep) ||
             lc_get_meta_int(&dconf, "xn", &xn) ||
             lc_get_meta_int(&dconf, "zstep", &zstep) ||
@@ -265,13 +269,33 @@ int main(int argc, char *argv[]){
     // Set the direction bits to be outputs
     err = LJM_eWriteName(dconf.handle, "DIO_DIRECTION", 1<<xdir_dioch | 1<<zdir_dioch);
     
-    // Initialize the direction of motion based on the x- and z-step 
-    // signs.  We will force the step sizes to be positive, but the 
-    // hardware pins should be set appropriately, and we'll initialize
-    // the xi and zi indices to be at their maximum or minimum based
-    // on the initial direction of motion.  This is especially important
-    // for the x-direction, since it will reverse itself after each 
-    // plane.
+    /* Initialize the direction of motion based on the x- and z-step 
+    signs.  We will force the step sizes to be positive, but the 
+    hardware pins should be set appropriately, and we'll initialize
+    the xi and zi indices to be at their maximum or minimum based
+    on the initial direction of motion.  This is especially important
+    for the x-direction, since it will reverse itself after each 
+    plane.
+    
+    xi and zi are counters that indicate the x- and z-grid-numbers.  If
+    the steps are negative, then they will start at their maximum (xn-1 
+    or zn-1) and decrease.  Otherwise, they start at zero and increase.
+    x0 and z0 are the grid numbers where the scan began.  When the scan
+    is complete, the stages will return to this position.
+    
+    xdir and zdir are +1 or -1 to indicate the current direction of scan.
+    zdir will never change, but xdir will change signs at the end of 
+    every grid row.  To eliminate redundant code segments, the loops are
+    constructed as while(1) with a break condition.
+    
+    xstep and zstep are the number of pulses to transmit between grid 
+    features, so they must always be positive.  Direction information
+    is exclusively contained in xdir and zdir.
+    */
+    
+    // Initialize the relevant registers and set the x and z direction
+    // bits.  The z-direction bit will never need to be changed until 
+    // the stages return to their original positions at the end.
     sprintf(stemp, "DIO%d", xdir_dioch);
     if(xstep < 0){
         xstep = -xstep;
@@ -302,7 +326,7 @@ int main(int argc, char *argv[]){
         return -1;
     }
     
-    // Log the starting locations. We will return to here later
+    // Log the starting locations. We will return here later.
     x0 = xi;
     z0 = zi;
     
@@ -371,8 +395,9 @@ int main(int argc, char *argv[]){
             lc_update_ef(&dconf);
             usleep(xwaitus);
         }
-        // Each time a pass along the x-axis is complete, teverse the 
-        // direction of motion
+        // Each time a pass along the x-axis is complete, reverse the 
+        // direction of motion.  Change the sign on xdir and update the
+        // direction bit appropriately.
         xdir = -xdir;
         sprintf(stemp, "DIO%d", xdir_dioch);
         if(xdir>0)
