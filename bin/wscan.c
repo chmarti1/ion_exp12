@@ -438,10 +438,10 @@ int main(int argc, char *argv[]){
     
     sprintf(stemp, "DIO%d", zdir_dioch);
     if(z0 >= zi){
-        dconf.efch[XPULSE_EF].counts = (z0 - zi)*zstep;
+        dconf.efch[ZPULSE_EF].counts = (z0 - zi)*zstep;
         LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
     }else{
-        dconf.efch[XPULSE_EF].counts = (zi - z0)*zstep;
+        dconf.efch[ZPULSE_EF].counts = (zi - z0)*zstep;
         LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);
     }
     
