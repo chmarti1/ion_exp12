@@ -777,7 +777,7 @@ The following parameters are recognized:
 .           EFDEGREES - Phase of the PWM waveform in degrees.
 .       In both input and output modes, the duty and phase are updated by the
 .       lc_update_ef() function.  
-. * COUNT or PULSE - edge counter
+. * COUNTER or PULSE - edge counter
 .       Input: valid channels 0,1,2,3,6,7 (T7) 4,5,6,7,8,9 (T4)
 .           EFEDGE - Count rising, falling, or ALL edges.
 .           EFDEBOUNCE - What debounce filter to use?
