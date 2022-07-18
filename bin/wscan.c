@@ -368,7 +368,7 @@ int main(int argc, char *argv[]){
             
             // construct the file name and open it.  Only write if the 
             // open operation is complete.
-            sprintf(filename, "%s/%03d_%03d.dat", dest_directory, xi, zi);            
+            sprintf(filename, "%s/%03d_%03d.dat", dest_directory, zi, xi);            
             fd = fopen(filename, "wb");
             if(fd){
                 // Write the data file
