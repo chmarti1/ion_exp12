@@ -1,4 +1,5 @@
 #include "lconfig.h"
+#include "wscan.h"
 #include <unistd.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -221,6 +222,12 @@ int main(int argc, char *argv[]){
     ax_iter_start(&xaxis);
     // z-loop
     while(!(err = ax_iter(&zaxis, -1))){
+        // Let the user know what's goin on
+        printf("z-index: %3d of %3d  (%lf%s)\n", 
+                ax_get_index(&zaxis), 
+                zaxis.niter, 
+                ax_get_pos(&zaxis), 
+                zaxis.units);
         
         // Create a directory for each z-slice
         sprintf(slice_directory, "%s/%03d", dest_directory, ax_get_index(&zaxis));
@@ -233,7 +240,11 @@ int main(int argc, char *argv[]){
         // x-loop
         while(!(err = ax_iter(&xaxis, -1))){
             // Let the user know what's going on
-            printf("xi = %3d/%3d, z = %3d/%3d\n", ax_get_index(&xaxis), xaxis.niter, ax_get_index(&zaxis), zaxis.niter);
+            printf("  x-index: %3d of %3d  (%lf%s)\n", 
+                    ax_get_index(&xaxis), 
+                    xaxis.niter, 
+                    ax_get_pos(&xaxis), 
+                    xaxis.units);
             // Record the current z and x indices
             if( lc_put_meta_int(&dconf, "x", ax_get_pos(&xaxis)) || 
                     lc_put_meta_int(&dconf, "z", ax_get_pos(&zaxis)) ){
@@ -283,6 +294,7 @@ int main(int argc, char *argv[]){
     }// End z-loop
     
     // Move back to the origin
+    printf("Returning to home.\n");
     // X-axis first
     ax_move(&xaxis, -xaxis.state, -1);
     // Then the z-axis

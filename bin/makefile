@@ -4,5 +4,5 @@ lconfig.o: lconfig.c lconfig.h lcmap.h
 lcmap.o: lcmap.c lcmap.h
 	gcc -Wall -c lcmap.c -o lcmap.o
 
-wscan: wscan.c lcmap.o lconfig.o
+wscan: wscan.c lcmap.o lconfig.o wscan.h
 	gcc -Wall wscan.c lconfig.o lcmap.o -lm -lLabJackM -o wscan
