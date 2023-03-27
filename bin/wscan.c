@@ -76,26 +76,14 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 int main(int argc, char *argv[]){
     int ch,             // holds the character for the getopt system
         err,            // error index
-        xdir_dioch,     // LabJack DIO channel for the x-direction bit
-        xstep,          // grid increment in pulses
-        xdir,           // +1 or -1 depending
-        xn,             // number of grid nodes
-        xi,             // x grid index
-        x0,             // x start location
-        xwaitus,        // Time for x motion in microseconds
-        zdir_dioch,     // LabJack DIO channel for the z-direction bit
-        zstep,          // grid increment in pulses
-        zdir,           // +1 or -1 depending
-        zn,             // number of grid nodes
-        zi,             // z grid index
-        z0,             // z start location
-        zwaitus,        // Time fo z motion in microseconds
         file_counter;   // index for generating file names
     char config_filename[STR_LEN], 
         dest_directory[STR_LEN],
+        slice_directory[STR_LEN],
         filename[STR_LEN],
         stemp[STR_SHORT],
         stemp1[STR_SHORT];
+    AxisIterator_t xaxis, zaxis;
     double ftemp;
     int itemp;
     
@@ -187,40 +175,19 @@ int main(int argc, char *argv[]){
             return -1;
         break;
         }
-    }    
-        
-    // Verify the extended feature channels
-    if(dconf.nefch < 2){
-        fprintf(stderr, "WSCAN: Requires two extended feature channels, found %d\n", dconf.nefch);
-        return -1;
-    }else if(dconf.efch[0].signal != LC_EF_COUNT || dconf.efch[0].direction != LC_EF_OUTPUT){
-        fprintf(stderr, "WSCAN: The first EF channel was not a COUNT output.\n");
-        return -1;
-    }else if(dconf.efch[1].signal != LC_EF_COUNT || dconf.efch[1].direction != LC_EF_OUTPUT){
-        fprintf(stderr, "WSCAN: The second EF channel was not a COUNT output.\n");
-        return -1;
     }
-    
-    // Establish the direction channel numbers as next to their corresponding pulse channels
-    xdir_dioch = dconf.efch[XPULSE_EF].channel + 1;
-    zdir_dioch = dconf.efch[ZPULSE_EF].channel + 1;
 
-    // Retrieve mandatory meta parameters
-    //   These define an x,z grid of probe locations to scan.
-    // xstep and zstep are the number of stepper motor steps to move
-    // between grid locations.  xn and zn are the number of grid 
-    // locations for each.
-    if(     lc_get_meta_int(&dconf, "xstep", &xstep) ||
-            lc_get_meta_int(&dconf, "xn", &xn) ||
-            lc_get_meta_int(&dconf, "zstep", &zstep) ||
-            lc_get_meta_int(&dconf, "zn", &zn)){
-        fprintf(stderr, "WSCAN: Missing mandatory meta configuration parameter(s): xstep, xn, zstep, or zn\n");
-        return -1;
-    // Do a little sanity checking
-    }else if(zn <= 0 || xn <= 0){
-        fprintf(stderr, "WSCAN: xn and zn must be positive. Found: xn=%d zn=%d\n", xn, zn);
+    // Initialize the axis iterators
+    // This includes configuration
+    if(ax_init(&xaxis, &dconf, 0, 'x')){
+        fprintf(stderr, "WSCAN: Configuration of the x-axis failed.\n");
         return -1;
     }
+    if(ax_init(&zaxis, &dconf, 1, 'z')){
+        fprintf(stderr, "WSCAN: Configuration of the z-axis failed.\n");
+        return -1;
+    }
+
 
     // Open the device connection
     if(lc_open(&dconf)){
@@ -243,109 +210,33 @@ int main(int argc, char *argv[]){
             lc_close(&dconf);
             return -1;
         }
-    // If the destination appears to be a file, raise an error
-    }else if(!S_ISDIR(dirstat.st_mode)){
-        fprintf(stderr, "WSCAN: The destination directory appears to be a file: %s\n", dest_directory);
-        lc_close(&dconf);
-        return -1;
     // If the directory already exists, warn the user
     }else{
-        fprintf(stderr, "WSCAN: WARNING! The destination directory already exists: %s\n", dest_directory);
-        ch = '?';
-        while(ch != 'Y'){
-            printf("Overwrite existing data?  (Y/n):");
-            scanf("%c", (char*) &ch);
-            if(ch == 'Y'){
-                printf("... overwriting ...\n");
-            }else if(ch == 'n'){
-                printf("... aborting ...\n");
-                return 0;
-            }else{
-                printf("... unexpected response.  Please enter 'Y' or 'n'.\n");
-            }
-        }
-    }
-
-    // Set the direction bits to be outputs
-    err = LJM_eWriteName(dconf.handle, "DIO_DIRECTION", 1<<xdir_dioch | 1<<zdir_dioch);
-    
-    /* Initialize the direction of motion based on the x- and z-step 
-    signs.  We will force the step sizes to be positive, but the 
-    hardware pins should be set appropriately, and we'll initialize
-    the xi and zi indices to be at their maximum or minimum based
-    on the initial direction of motion.  This is especially important
-    for the x-direction, since it will reverse itself after each 
-    plane.
-    
-    xi and zi are counters that indicate the x- and z-grid-numbers.  If
-    the steps are negative, then they will start at their maximum (xn-1 
-    or zn-1) and decrease.  Otherwise, they start at zero and increase.
-    x0 and z0 are the grid numbers where the scan began.  When the scan
-    is complete, the stages will return to this position.
-    
-    xdir and zdir are +1 or -1 to indicate the current direction of scan.
-    zdir will never change, but xdir will change signs at the end of 
-    every grid row.  To eliminate redundant code segments, the loops are
-    constructed as while(1) with a break condition.
-    
-    xstep and zstep are the number of pulses to transmit between grid 
-    features, so they must always be positive.  Direction information
-    is exclusively contained in xdir and zdir.
-    */
-    
-    // Initialize the relevant registers and set the x and z direction
-    // bits.  The z-direction bit will never need to be changed until 
-    // the stages return to their original positions at the end.
-    sprintf(stemp, "DIO%d", xdir_dioch);
-    if(xstep < 0){
-        xstep = -xstep;
-        xdir = -1;
-        xi = xn-1;
-        err = err ? err : LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
-    }else{
-        xdir = 1;
-        xi = 0;
-        err = err ? err : LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
-    }
-
-    sprintf(stemp, "DIO%d", zdir_dioch);        
-    if(zstep < 0){
-        zstep = -zstep;
-        zdir = -1;
-        zi = zn-1;
-        err = err ? err : LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);        
-    }else{
-        zdir = 1;
-        zi = 0;
-        err = err ? err : LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
-    }
-    
-    if(err){
-        fprintf(stderr, "WSCAN: Failed to initialize the motor direction pins. Aborting\n");
-        lc_close(&dconf);
+        fprintf(stderr, "WSCAN: The destination directory already exists: %s\n", dest_directory);
         return -1;
     }
-    
-    // Log the starting locations. We will return here later.
-    x0 = xi;
-    z0 = zi;
-    
-    // Calculate wait times
-    xwaitus = xstep * 1e6 / dconf.effrequency + TSETTLE_US;
-    zwaitus = zstep * 1e6 / dconf.effrequency + TSETTLE_US;
-    
-    // Loop through the entire grid array
-    // An out-of-bounds check is necessary to decide whether to command
-    // movement and whether to jump out of the loop.  To eliminate 
-    // redundant
+
+    // Set up the x- and z-axes iteration
+    ax_iter_start(&zaxis);
+    ax_iter_start(&xaxis);
     // z-loop
-    while(1){
+    while(!(err = ax_iter(&zaxis, -1))){
+        
+        // Create a directory for each z-slice
+        sprintf(slice_directory, "%s/%03d", dest_directory, ax_get_index(&zaxis));
+        if(mkdir(slice_directory, 0755)){
+            fprintf(stderr, "WSCAN: Failed to create slice directory: %s\n", slice_directory);
+            lc_close(&dconf);
+            return -1;
+        }
+        
         // x-loop
-        while(1){
+        while(!(err = ax_iter(&xaxis, -1))){
             // Let the user know what's going on
-            printf("xi = %d (%d), zi = %d (%d)\n", xi, xn, zi, zn);
+            printf("xi = %3d/%3d, z = %3d/%3d\n", ax_get_index(&xaxis), xaxis.niter, ax_get_index(&zaxis), zaxis.niter);
             // Record the current z and x indices
-            if(lc_put_meta_int(&dconf, "xi", xi) || lc_put_meta_int(&dconf, "zi", zi)){
+            if( lc_put_meta_int(&dconf, "x", ax_get_pos(&xaxis)) || 
+                    lc_put_meta_int(&dconf, "z", ax_get_pos(&zaxis)) ){
                 fprintf(stderr, "WSCAN: WARNING! Failed to write the xi or zi meta values prior to data acquisition\n");
             }
             
@@ -368,7 +259,10 @@ int main(int argc, char *argv[]){
             
             // construct the file name and open it.  Only write if the 
             // open operation is complete.
-            sprintf(filename, "%s/%03d_%03d.dat", dest_directory, zi, xi);            
+            sprintf(filename, "%s/%03d_%03d.dat", 
+                    slice_directory, 
+                    ax_get_index(&zaxis), 
+                    ax_get_index(&xaxis));
             fd = fopen(filename, "wb");
             if(fd){
                 // Write the data file
@@ -382,71 +276,19 @@ int main(int argc, char *argv[]){
             }
             lc_stream_clean(&dconf);
             
-            
-            xi += xdir;
-            // Will the motion put the axis out-of-range?
-            if(xi<0 || xi>=xn){
-                // Undo the index increment and jump out of the loop
-                xi -= xdir;
-                break;
-            }
-            // Command x-motion
-            dconf.efch[XPULSE_EF].counts = xstep;
-            lc_update_ef(&dconf);
-            usleep(xwaitus);
-        }
-        // Each time a pass along the x-axis is complete, reverse the 
-        // direction of motion.  Change the sign on xdir and update the
-        // direction bit appropriately.
-        xdir = -xdir;
-        sprintf(stemp, "DIO%d", xdir_dioch);
-        if(xdir>0)
-            err = LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
-        else
-            err = LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
-            
-        if(err){
-            fprintf(stderr, "WSCAN: Failed to set x-direction pin while scanning!\n");
-            lc_close(&dconf);
-            return -1;
-        }
+        }// End x-loop
         
-        zi += zdir;
-        // Will the motion put the axis out-of-range?
-        if(zi<0 || zi>=zn){
-            // Undo the index increment and jump out of the loop
-            zi -= zdir;
-            break;
-        }
-        // Command z-motion
-        dconf.efch[ZPULSE_EF].counts = zstep;
-        lc_update_ef(&dconf);
-        usleep(zwaitus);
-    }
+        // Set up for the next scan
+        ax_iter_repeat(&xaxis);
+    }// End z-loop
     
-    // Finally, calculate the steps to move back to the origin
+    // Move back to the origin
+    // X-axis first
+    ax_move(&xaxis, -xaxis.state, -1);
+    // Then the z-axis
+    ax_move(&zaxis, -zaxis.state, -1);
     
-    // Set the appropriate direction and move
-    sprintf(stemp, "DIO%d", xdir_dioch);
-    if(x0 >= xi){
-        dconf.efch[XPULSE_EF].counts = (x0 - xi)*xstep;
-        LJM_eWriteName(dconf.handle, stemp, XDIR_POS);
-    }else{
-        dconf.efch[XPULSE_EF].counts = (xi - x0)*xstep;
-        LJM_eWriteName(dconf.handle, stemp, !XDIR_POS);
-    }
-    
-    sprintf(stemp, "DIO%d", zdir_dioch);
-    if(z0 >= zi){
-        dconf.efch[ZPULSE_EF].counts = (z0 - zi)*zstep;
-        LJM_eWriteName(dconf.handle, stemp, ZDIR_POS);
-    }else{
-        dconf.efch[ZPULSE_EF].counts = (zi - z0)*zstep;
-        LJM_eWriteName(dconf.handle, stemp, !ZDIR_POS);
-    }
-    
-    lc_update_ef(&dconf);
-    
+    // All done
     lc_close(&dconf);
     return 0;
 }

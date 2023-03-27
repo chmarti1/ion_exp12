@@ -51,7 +51,7 @@ wire passes through 0 degrees can also be stablished.
     # Detect the digital input channel
     dich = int(np.log2(conf.distream))
 
-    # First, establish the edge events
+    # First, establish an array of indices that correspond to edge events
     edges_I = data.get_dievents(dich)
     # Get the current signal
     current = data.get_channel(0)
@@ -66,18 +66,33 @@ wire passes through 0 degrees can also be stablished.
     # possible to determine which side of the wider pulse should be used
     # to identify 0 degrees.
     
+    # (1) Determine the disc direction and identify the wire 1 edge
     # Measure out the durations of the first four intervals (5 edges)
     # The longest interval will correspond to the disc transit
+    # _____      __    ____________________      __    ___
+    # CW   |____|< |__|                    |____|  |__|
+    #______    __      ____________________    __      ___
+    # CCW  |__| >|____|                    |__|  |____|
+    # 
+    # The arrows (<, >) mark the wire-1 edge.
+    #
     edges_dI = edges_I[1:5] - edges_I[0:4]
-    ii = np.argmax(edges_dI)  # longest interval
+    ii = np.argmax(edges_dI)
     # If the first pulse is the longest of the two
     if edges_dI[(ii+1)%4] > edges_dI[(ii+3)%4]:
         ii = (ii+2)%4
+        is_ccw = False
     # If the first pulse is the shorter of the two
     else:
         ii = (ii+3)%4
+        is_ccw = True
+    # ii is now the index of the first wire-1 edge
+    # is_ccw now indicates the direction of disc rotation. When True
+    # the wire order will be reversed
         
-    # Now, starting at ii, downselect all the edges
+    # (2) Starting at ii, downselect all the edges to isolate only the
+    # wire-1 edges.  Then, calculate the duration between the edges to
+    # establish disc speed during the transits.
     edges_I = edges_I[ii::4]
     # Calculate the samples between complete rotations.
     edges_dI = np.empty_like(edges_I,dtype=int)
@@ -86,7 +101,6 @@ wire passes through 0 degrees can also be stablished.
     # If there is greater than 1% variation, there is a problem.
     if np.max(edges_dI)/np.min(edges_dI) > 1.01:
         raise Exception('The disc speed varied by more than 1% in file: ' + source)
-
     # edges_I is now an array of every index corresponding to 0rad of 
     # disc rotation.
     # edges_dI is an array of indices with the number of samples between
@@ -105,8 +119,8 @@ wire passes through 0 degrees can also be stablished.
     out['wire'] = [{'theta':[], 'current':[]} for ii in range(Nwire)]
     wire = out['wire']
     
-    # First, look for pedestals that happened before the first wire 1 
-    # trigger event.  We'll be using the first edge pair to extrapolate.
+    # First, look for pedestals that happened before the first wire-1 
+    # edge.  We'll be using the first edge pair to extrapolate.
     I = edges_I[0]
     dI = edges_dI[0]
     # Calculate the angle rotated between each sample
