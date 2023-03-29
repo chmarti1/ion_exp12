@@ -35,6 +35,8 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 " - There must be meta parameters with the following names:\n"\
 "   \"xstep\" (int): The x-axis increment in pulses (+/-).\n"\
 "   \"xn\" (int): The number of x-axis scan locations (min 1).\n"\
+"   \"xcal\" (float): The distance moved per step (>0).\n"\
+"   \"xunits\" (str): The distance units string.\n"\
 "   \"zstep\" (int): The z-axis increment in pulses (+/-).\n"\
 "   \"zn\" (int): The number of z-axis scan locations (min 1).\n"\
 "   These define a grid of disc locations in the x-z plane.  The x-axis\n"\
@@ -70,7 +72,7 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 "These will be inserted into the data files whether or not they were in the\n"\
 "original configuration file.\n"\
 "\n"\
-"(c)2022  Christopher R. Martin\n";
+"(c)2023  Christopher R. Martin\n";
 
 
 int main(int argc, char *argv[]){
@@ -187,7 +189,19 @@ int main(int argc, char *argv[]){
         fprintf(stderr, "WSCAN: Configuration of the z-axis failed.\n");
         return -1;
     }
-
+    // Verify that the wire radii are configured
+    // wscan doesn't need them, but the post processing codes will
+    for(ii=0; ii<LC_MAX_META; ii++){
+        sprintf(stemp, "r%d", ii);
+        if(lc_get_meta_type(&dconf, stemp) == LC_MT_FLT){
+            lc_get_meta_flt(&dconf, stemp, &ftemp);
+            printf("Wire %d radius: %lf", ii, ftemp);
+        }else if(ii==0){
+            fprintf(stderr, "WSCAN: Found no wire radii in the configuration file.\n");
+            return -1;
+        }else
+            break;
+    }
 
     // Open the device connection
     if(lc_open(&dconf)){

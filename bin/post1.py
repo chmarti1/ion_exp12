@@ -89,7 +89,7 @@ wire passes through 0 degrees can also be stablished.
     # ii is now the index of the first wire-1 edge
     # is_ccw now indicates the direction of disc rotation. When True
     # the wire order will be reversed
-        
+    
     # (2) Starting at ii, downselect all the edges to isolate only the
     # wire-1 edges.  Then, calculate the duration between the edges to
     # establish disc speed during the transits.

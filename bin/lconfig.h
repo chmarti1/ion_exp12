@@ -268,7 +268,14 @@ typedef struct __lc_aoconf_t__ {
     char            label[LCONF_MAX_STR];   // Output channel label
 } lc_aoconf_t;
 
-typedef enum {LC_EDGE_RISING, LC_EDGE_FALLING, LC_EDGE_ANY} lc_edge_t;
+
+// Edge enumerated type for specifing rising or falling edges in the
+// extended features
+typedef enum __lc_edge_t__ {
+    LC_EDGE_RISING, 
+    LC_EDGE_FALLING, 
+    LC_EDGE_ANY
+} lc_edge_t;
 
 
 // The file format specifier indicates whether to use binary or ascii/text 
@@ -331,6 +338,14 @@ typedef struct __lc_comconf_t__ {
 } lc_comconf_t;
 
 
+typedef enum __lc_metatype_t__ {
+    LC_MT_ERR = LC_ERROR,
+    LC_MT_NONE = 0,
+    LC_MT_INT = 1,
+    LC_MT_FLT = 2,
+    LC_MT_STR = 3
+} lc_metatype_t;
+
 // The lc_meta_t is a struct for user-defined flexible parameters.
 // These are not used to configure the DAQ, but simply data of record
 // relevant to the measurement.  They may be needed by the parent program
@@ -343,7 +358,7 @@ typedef struct __lc_meta_t__ {
         int ivalue;
         double fvalue;
     } value;                        // union for flexible data types
-    char type;                      // reminder of what type we have
+    lc_metatype_t type;             // The meta data type
 } lc_meta_t;
 
 // Ring Buffer structure
@@ -361,7 +376,8 @@ typedef struct __lc_ringbuf_t__ {
     double* buffer;                 // the buffer array
 } lc_ringbuf_t;
 
-
+// Enumerated type for specifying a device conneciton
+// This is a mapping to the LJM constants that specify the same thing
 typedef enum __lc_con_t__ {
     LC_CON_NONE=-1,
     LC_CON_USB=LJM_ctUSB, 
@@ -375,7 +391,8 @@ typedef enum __lc_con_t__ {
     LC_CON_WIFI_UDP = LJM_ctWIFI_UDP
 } lc_con_t;
 
-
+// Enumerated type for specifying a device type
+// This is a mapping to the LJM constants that specify the same thing
 typedef enum __lc_dev_t__ {
     LC_DEV_NONE=-1,
     LC_DEV_ANY=LJM_dtANY, 
@@ -385,6 +402,10 @@ typedef enum __lc_dev_t__ {
     LC_DEV_DIGIT=LJM_dtDIGIT
 } lc_dev_t;
 
+
+// DEVICE CONFIGURATION STRUCT TYPE
+//  This is the top-level configuration struct. 
+//
 typedef struct __lc_devconf_t__ {
     // Global configuration
     lc_con_t connection;                 // requested connection type index
@@ -993,8 +1014,40 @@ Prints a display of the parameters configured in DCONF.
 void lc_show_config(lc_devconf_t* dconf);
 
 
+
+/*GET_META_TYPE
+Detect the data type of a meta parameter.
+Returns the type code of the parameter.  LC_GET_META_TYPE is also designed
+to be used to detect whether the parameter exists, so it does not print 
+error or warning messages if the parameter is not found.  Instead it returns
+LC_MT_NONE (or zero), so it can be used conveniently in an if() statement:
+
+    if(lc_get_meta_type(&dconf, "myparam"))
+    {
+        ... parameter exists ...
+    }else{
+        ... parameter does not exist ...
+    }
+
+*/
+lc_metatype_t lc_get_meta_type(lc_devconf_t *dconf, const char* param);
+
+/*DEL_META
+Delete an existing meta parameter.
+If the parameter is not found, returns LC_ERROR, and prints an error message to
+stderr.  Otherwise, the parameter is removed from the meta parameter list.
+
+DEL_META also checks to make sure that there are no "zombie" parameters.  The meta
+list is a sequence of meta parameter structs, and the first empty struct indicates
+the end of the list (much like a c-string). If the list is modified incorrectly, it 
+is possible for meta parameters to remain past the end of the list.  They will appear
+to have been deleted for the purposes of GET_META and PUT_META, but they should
+have also been cleared.  DEL_META will clear them and print a warning.
+*/
+int lc_del_meta(lc_devconf_t *dconf, const char* param);
+
 /*GET_META_XXX
-From the "devnum" device configuration, retrieve a meta parameter of the specified type.
+Retrieve a meta parameter of the specified type.
 If the type is called incorrectly, the function will still return a value, but it will
 be the giberish data that you get when you pull from a union.
 If the parameter is not found, get_meta_XXX will return an error.  Parameters are not called
