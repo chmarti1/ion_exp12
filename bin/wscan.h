@@ -1,5 +1,5 @@
 #include "lconfig.h"
-#include <time.h>
+#include <unistd.h>
 
 /* AxisIterator
  *  A struct to manage axis motion using stepper motors. It requires an
@@ -8,7 +8,10 @@
  * 
  * 
  */
- 
+
+#ifndef __WSCAN_H__
+#define __WSCAN_H__
+
 #define AX_STR          64          // Standard string length
 #define AX_SETTLE_US    100000      // Time to wait for the axis motion to settle
 
@@ -77,7 +80,7 @@ int ax_init(AxisIterator_t *ax, lc_devconf_t *dconf, int efch, char axis){
     ax->efch = efch;
     // Automatically use the digital output channel next to the EF channel
     // for the direction bit
-    dirch = dconf->efch[efch].channel+1
+    dirch = dconf->efch[efch].channel+1;
     // Verify that the direction pin is configured to an output
     if(! (dconf->domask & 1<<dirch)){
         fprintf(stderr, "AX_INIT: direction pin, DIO%d, is not configured as an output.\n", dirch);
@@ -89,13 +92,13 @@ int ax_init(AxisIterator_t *ax, lc_devconf_t *dconf, int efch, char axis){
     // Retrieve the configuration parameters from the LConfig meta variables
     // STEPS
     sprintf(stemp, "%cstep", axis);
-    if(lc_get_meta_int(&dconf, stemp, &ax->steps)){
+    if(lc_get_meta_int(dconf, stemp, &ax->steps)){
         fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
         return -1;
     }
     // NITER
     sprintf(stemp, "%cn", axis);
-    if(lc_get_meta_int(&dconf, stemp, &ax->niter)){
+    if(lc_get_meta_int(dconf, stemp, &ax->niter)){
         fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
         return -1;
     }else if(ax->niter <= 0){
@@ -104,14 +107,14 @@ int ax_init(AxisIterator_t *ax, lc_devconf_t *dconf, int efch, char axis){
     }
     // DPOS
     sprintf(stemp, "%cdir", axis);
-    if(lc_get_meta_int(&dconf, stemp, &ax->dpos)){
+    if(lc_get_meta_int(dconf, stemp, &ax->dpos)){
         fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
         return -1;
     }
     ax->dpos = (ax->dpos != 0); // Force dpos to be 1 or 0
     // CAL
     sprintf(stemp, "%ccal", axis);
-    if(lc_get_meta_int(&dconf, stemp, &ax->cal)){
+    if(lc_get_meta_flt(dconf, stemp, &ax->cal)){
         fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
         return -1;
     }else if(ax->cal <= 0){
@@ -120,13 +123,74 @@ int ax_init(AxisIterator_t *ax, lc_devconf_t *dconf, int efch, char axis){
     }
     // UNITS
     sprintf(stemp, "%cunits", axis);
-    if(lc_get_meta_str(&dconf, stemp, &ax->units)){
+    if(lc_get_meta_str(dconf, stemp, ax->units)){
         fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
         return -1;
     }
 
     return 0;
 }
+
+
+
+/* AX_MOVE - Move the axis a number of steps without iteration
+ * 
+ * Without needing to call AX_ITER_BEGIN() or AX_ITER(), just command
+ * motion in the axis.
+ * 
+ *   steps : The number of steps by which to move the axis.  Direction
+ *           is indicated by the sign of steps.
+ * 
+ * wait_us : The number of microseconds to wait before returning for the
+ *           motion to complete.  Set to 0 to disable the wait, and set
+ *           to a negative value to automatically calculate the value 
+ *           from the number of pulses.  AX_SETTLE_US is added to the
+ *           calculated value to ensure that any remaining vibration has
+ *           subsided.
+ */
+int ax_move(AxisIterator_t *ax, int steps, int wait_us){
+    int dir, psteps, err;
+    
+    // Recode steps from +/- into a direction bit and a positive
+    // number of steps
+    // If holding position, do nothing
+    if(steps == 0)
+        return 0;
+    // If in the negative direction
+    else if(steps < 0){
+        psteps = -steps;
+        dir = ! ax->dpos;
+    // If in the positive direction
+    }else{
+        psteps = steps;
+        dir = ax->dpos;
+    }
+    
+    // Write to the direction bit
+    err = LJM_eWriteName(ax->dconf->handle, ax->dregister, dir);
+    // Send the pulse count
+    ax->dconf->efch[ax->efch].counts = psteps;
+    err = err || lc_update_ef(ax->dconf);
+    if(err){
+        fprintf(stderr, "AX_ITER: Failed to transmit pulse out\n");
+        return -1;
+    }
+    
+    // Update the axis state
+    ax->state += steps;
+    
+    // Case out the wait 
+    // If wait is negative, we'll calculate it
+    if(wait_us < 0){
+        usleep((int)(psteps * 1e6 / ax->dconf->effrequency) + AX_SETTLE_US);
+    // If wait is positive, just wait that long
+    }else if(wait_us > 0){
+        usleep(wait_us);
+    }
+    // If wait is zero, don't wait.
+    return 0;
+}
+
 
 /* AX_ITER_START - set up the first motion in an axis
  * AX_ITER_REPEAT - repeat the last iteration, but backwards
@@ -207,68 +271,6 @@ int ax_iter(AxisIterator_t *ax, int wait_us){
     return ax_move(ax, distance, wait_us);
 }
 
-
-
-/* AX_MOVE - Move the axis a number of steps without iteration
- * 
- * Without needing to call AX_ITER_BEGIN() or AX_ITER(), just command
- * motion in the axis.
- * 
- *   steps : The number of steps by which to move the axis.  Direction
- *           is indicated by the sign of steps.
- * 
- * wait_us : The number of microseconds to wait before returning for the
- *           motion to complete.  Set to 0 to disable the wait, and set
- *           to a negative value to automatically calculate the value 
- *           from the number of pulses.  AX_SETTLE_US is added to the
- *           calculated value to ensure that any remaining vibration has
- *           subsided.
- */
-int ax_move(AxisIterator_t *ax, int steps, int wait_us){
-    int dir, psteps;
-    
-    // Recode steps from +/- into a direction bit and a positive
-    // number of steps
-    // If holding position, do nothing
-    if(steps == 0)
-        return 0;
-    // If in the negative direction
-    else if(steps < 0){
-        psteps = -steps;
-        dir = ! ax->dpos;
-    // If in the positive direction
-    }else{
-        psteps = steps;
-        dir = ax->dpos;
-    }
-    
-    // Write to the direction bit
-    err = LJM_eWriteName(ax->dconf.handle, ax->dregister, dir);
-    // Send the pulse count
-    ax->dconf[efch].counts = psteps;
-    err = err || lc_update_ef(&ax->dconf);
-    if(err){
-        fprintf(stderr, "AX_ITER: Failed to transmit pulse out\n");
-        return -1;
-    }
-    
-    // Update the axis state
-    ax->state += steps;
-    
-    // Case out the wait 
-    // If wait is negative, we'll calculate it
-    if(wait_us < 0){
-        sleep((int)(psteps * 1e6 / ax->dconf.effrequency) + AX_SETTLE_US);
-    // If wait is positive, just wait that long
-    }else if(wait_us > 0){
-        sleepus(wait_us);
-    }
-    // If wait is zero, don't wait.
-    return 0;
-}
-
-
-
 /* AX_GET_POS   - Return the position in length units
  * AX_GET_INDEX - Return the current index in the iteration
  * 
@@ -280,3 +282,5 @@ double ax_get_pos(AxisIterator_t *ax){
 int ax_get_index(AxisIterator_t *ax){
     return ax->_index;
 }
+
+#endif
