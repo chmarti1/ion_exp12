@@ -23,33 +23,56 @@ target = 'post1'
 extension = '.p1d'
 
 
-def post1(source, target=None, Nwire=4, theta_min=-0.3, theta_max=0.3, quiet=False):
+
+def post1(workerdata):
     """Accepts a path to the .dat file to load and a .p1d file to generate
-    out = post1(source, target=None)
+    post1(workerdata)
     
-The source should be a path to a .dat file containing the original wire
-data.  The target should be a .p1d file to which the post-processing 
-results will be written.  If target is set to any value that evaluates 
-to a boolean False (like "" or None), no results will be written.
+The post processing function loads a raw LConfig data file containing wire
+data, and appends it to a WSOLVE wire data file.  The workerdata dictionary
+MUST contain the following MANDATORY data elements:
 
-The post1 function returns the same output dictionary that is written to
-the target file.  It is an array of dicts with a "theta" and a "current"
-entry.  They are lists of angles and current measurements respectively,
-and each dict corresponds to one of the wires.
-
-The digital signal is used to establish on which sample wire 1 (index 0)
-passes through 0 degrees.  All samples between these events are 
-interpolated to establish the disc angle.  Since each of the wires are 
-precisely placed equidistant around the disc, the sample where each 
-wire passes through 0 degrees can also be stablished.
+    source      The path to the LConfig data file to read in
+    theta_min   The minimum wire angle to include
+    theta_max   The maximum wire angle to include
+    theta_step  The wire angle increment when binning data
+    wiredata    An IOstream to the open wire data file
+    wdlock      A lock (mutex) for writing to the file
+    quiet       True/False should the function write to stdout?
 """
+    source = workerdata['source']
+    theta_min = workerdata['theta_min']
+    theta_max = workerdata['theta_max']
+    theta_step = workerdata['theta_step']
+    wdf = workerdata['wiredata']
+    wdlock = workerdata['wdlock']
+    quiet = workerdata['quiet']
+
     if not quiet:
         print('[' + source + '] starting...')
         
     conf,data = lc.load(source)
 
+    # Extract the wire radii
+    rwire = []
+    Nwire = 0
+    param = f'r{Nwire}'
+    while param in conf.meta_values:
+        rwire.append(conf.meta_values[param])
+        Nwire += 1
+    if Nwire == 0:
+        raise Exception('Data file has no wire radii defined: ' + source)
+    
+    # Calculate the number of theta bins
+    Ntheta = int((theta_max - theta_min)//theta_step)
+    
     # Detect the digital input channel
     dich = int(np.log2(conf.distream))
+
+    # We'll use three indexing schemes in this code: 
+    #   I - refers to an index in the total raw data set.
+    #   J - refers to an index in the down-selected (output) data set
+    #   ii - is a general purpose index; useage varies
 
     # First, establish an array of indices that correspond to edge events
     edges_I = data.get_dievents(dich)
@@ -75,24 +98,28 @@ wire passes through 0 degrees can also be stablished.
     # CCW  |__| >|____|                    |__|  |____|
     # 
     # The arrows (<, >) mark the wire-1 edge.
-    #
+    
+    # Calculate the number of samples in the intervals between the first
+    # five edges (four intervals)
     edges_dI = edges_I[1:5] - edges_I[0:4]
+    # Which of them is the longest?  That's the disc rotation
     ii = np.argmax(edges_dI)
-    # If the first pulse is the longest of the two
+    # Now, compare the durations of the two pulses corresponding to the
+    # dark stripes.  If the first is the longest, the rotation is CW
     if edges_dI[(ii+1)%4] > edges_dI[(ii+3)%4]:
         ii = (ii+2)%4
         is_ccw = False
-    # If the first pulse is the shorter of the two
+    # Otherwise, the rotation is CCW
     else:
         ii = (ii+3)%4
         is_ccw = True
-    # ii is now the index of the first wire-1 edge
+    # edges_I[ii] is now the index of the first wire-0 edge
     # is_ccw now indicates the direction of disc rotation. When True
     # the wire order will be reversed
     
-    # (2) Starting at ii, downselect all the edges to isolate only the
-    # wire-1 edges.  Then, calculate the duration between the edges to
-    # establish disc speed during the transits.
+    # (2) Starting at edges_I[ii], downselect all the edges to isolate 
+    # only the wire-0 edges.  Then, calculate the duration between the 
+    # edges to establish disc speed during the transits.
     edges_I = edges_I[ii::4]
     # Calculate the samples between complete rotations.
     edges_dI = np.empty_like(edges_I,dtype=int)
@@ -102,38 +129,37 @@ wire passes through 0 degrees can also be stablished.
     if np.max(edges_dI)/np.min(edges_dI) > 1.01:
         raise Exception('The disc speed varied by more than 1% in file: ' + source)
     # edges_I is now an array of every index corresponding to 0rad of 
-    # disc rotation.
+    # disc rotation for wire-0.
     # edges_dI is an array of indices with the number of samples between
     # edges (for a single rotation).  The last element has been 
     # duplicated so it is the same length as edges_I.
     
-    # Initialize a result - we'll write it with json
-    out = {
-        'xi':conf.get_meta('xi'),
-        'xn':conf.get_meta('xn'),
-        'xstep':conf.get_meta('xstep'),
-        'zi':conf.get_meta('zi'),
-        'zn':conf.get_meta('zn'),
-        'zstep':conf.get_meta('zstep'),
-    }
-    out['wire'] = [{'theta':[], 'current':[]} for ii in range(Nwire)]
-    wire = out['wire']
+    # Initialize bins to accumulate a histogram for 
+
+    bins = [[ [] for _ in range(Ntheta)] for _ in range(Nwire)]
     
-    # First, look for pedestals that happened before the first wire-1 
-    # edge.  We'll be using the first edge pair to extrapolate.
+    # Before we loop over the bulk of the data, we'll look at data before
+    # the first trigger event.
+    # Let I be the index of the first wire-0 trigger event.  dI is the
+    # number of samples betweeen trigger events
     I = edges_I[0]
     dI = edges_dI[0]
     # Calculate the angle rotated between each sample
     dtheta = 2*np.pi / dI
     # Loop through wire indices
     for iwire in range(Nwire):
+        # Izero, Imin, and Imax are the data indices where the wire angle
+        # is zero, theta_min, and theta_max.
         Izero = I - ((Nwire-iwire)*dI) // Nwire
         Imin = max(0, Izero + int(theta_min / dtheta))
         Imax = max(0, Izero + int(theta_max / dtheta))
-        # use ii for an iterator over individual indices
-        for ii in range( Imin, Imax ):
-            wire[iwire]['theta'].append((ii - Izero) * dtheta)
-            wire[iwire]['current'].append(current[ii])
+        # Loop through the individual measurements
+        for ii in range(Imin, Imax+1):
+            # Calculate the sample angle
+            theta = (ii-Izero) * dtheta
+            # Where does this sample belong?
+            J = int(np.floor((theta - theta_min)/theta_step))
+            bins[iwire][J].append(current[ii])
     
     # Next, loop through the other rotations
     for I, dI, in zip(edges_I, edges_dI):
@@ -146,19 +172,38 @@ wire passes through 0 degrees can also be stablished.
             Imax = min(Ndata-1, Izero + int(theta_max / dtheta))
             # use ii for an iterator over individual indices
             for ii in range( Imin, Imax ):
-                wire[iwire]['theta'].append((ii - Izero) * dtheta)
-                wire[iwire]['current'].append(current[ii])
-
-    if target:
-        if not quiet:
-            print('[' + source + '] writing: ' + target)
-        with open(target, 'wb') as ff:
-            pickle.dump(out, ff)
-
-    if not quiet:
-        print('[' + source + '] done.')
-    return out
-
+                # Calculate the sample angle
+                theta = (ii-Izero) * dtheta
+                # Where does this sample belong?
+                J = int(np.floor((theta - theta_min)/theta_step))
+                bins[iwire][J].append(current[ii])
+    
+    wire_mean = np.empty((Nwire,Ntheta), dtype=float)
+    wire_median = np.empty((Nwire,Ntheta), dtype=float)
+    wire_std = np.empty((Nwire,Ntheta), dtype=float)
+    wire_min = np.empty((Nwire,Ntheta), dtype=float)
+    wire_max = np.empty((Nwire,Ntheta), dtype=float)
+    # Calculate statistics on each bin
+    for iwire in range(Nwire):
+        for J in range(Ntheta):
+            wire_mean[iwire,J] = np.mean(bins[iwire][J])
+            wire_median[iwire,J] = np.median(bins[iwire][J])
+            wire_std[iwire,J] = np.std(bins[iwire][J])
+            wire_min[iwire,J] = np.min(bins[iwire][J])
+            wire_max[iwire,J] = np.max(bins[iwire][J])
+            
+    # Construct an output dictionary
+    wire = {
+        'r':rwire,
+        'theta':np.arange(0.5, Ntheta, 1.0) * dtheta + theta_min,
+        'mean':wire_mean,
+        'median':wire_median,
+        'std':wire_std,
+        'min':wire_min,
+        'max':wire_max,
+    }
+    return wire
+    
 
 # If this is being run as a script
 if __name__ == '__main__':

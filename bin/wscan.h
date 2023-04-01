@@ -122,9 +122,8 @@ int ax_init(AxisIterator_t *ax, lc_devconf_t *dconf, int efch, char axis){
         return -1;
     }
     // UNITS
-    sprintf(stemp, "%cunits", axis);
-    if(lc_get_meta_str(dconf, stemp, ax->units)){
-        fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: %s\n", stemp);
+    if(lc_get_meta_str(dconf, "unit_length", ax->units)){
+        fprintf(stderr, "AX_INIT: Did not find required meta configuration parameter: unit_length\n", stemp);
         return -1;
     }
 

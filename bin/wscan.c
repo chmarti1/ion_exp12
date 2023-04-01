@@ -36,14 +36,24 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 " - There must be meta parameters with the following names:\n"\
 "   \"xstep\" (int): The x-axis increment in pulses (+/-).\n"\
 "   \"xn\" (int): The number of x-axis scan locations (min 1).\n"\
+"   \"xdir\" (int): Which direction is positive (1 or 0).\n"\
 "   \"xcal\" (float): The distance moved per step (>0).\n"\
 "   \"xunits\" (str): The distance units string.\n"\
 "   \"zstep\" (int): The z-axis increment in pulses (+/-).\n"\
 "   \"zn\" (int): The number of z-axis scan locations (min 1).\n"\
+"   \"zdir\" (int): Which direction is positive (1 or 0).\n"\
+"   \"zcal\" (float): The distance moved per step (>0).\n"\
+"   \"zunits\" (str): The distance units string.\n"\
 "   These define a grid of disc locations in the x-z plane.  The x-axis\n"\
 "   is assumed to have been carefully aligned with the plane of disc\n"\
 "   rotation. The z-axis is roughly (but not necessarily precisely) \n"\
 "   perpendicular to the plane of disc rotation.\n"\
+" - There must be AT LEAST one meta parameter beginning with a lower case\n"\
+"   'r', followed by an integer index, identifying a wire and its radius.\n"\
+"   For example:\n"\
+"       r0  16.4\n"\
+"       r1  16.9\n"\
+"   Defines a disc with two wires, each with the specified radius.\n"\
 "\n"\
 "The data collection will begin wherever the system is positioned when\n"
 "wscan begins. Each measurement will be written to its own dat file in\n"
