@@ -251,19 +251,13 @@ by interpolation.  The wires are presumed to be equally spaced around
 the disc.
 """)
     parser.add_argument('source',
-            help='The data source directory to target',
+            help='The directory containing .dat files from a scan',
             default=None)
             
     parser.add_argument('-f', '--force', 
             dest='force',
             help='Force overwriting prior post1 results',
             action='store_true')
-            
-    parser.add_argument('-n',
-            dest='N',
-            type=int,
-            default=4,
-            help='Number of wires (default 4)')
             
     parser.add_argument('-c',
             dest='cpus',
@@ -282,62 +276,17 @@ the disc.
             help='Parent directory to search for data directories')
             
     args = parser.parse_args()
-
-    print(args)
-
-    # Identify the source directory
-    source_dir = None
-    if args.source is None:
-        raise Exception('A source is required.  Call with --help for more information.')
-    # If it is an explicit path to a directory
-    elif os.path.isdir(args.source):
-        source_dir = args.source
-    # Look for a matching data set
-    elif args.datadir is not None and os.path.isdir(args.datadir):
-        contents = os.listdir(args.datadir)
-        # Loop through all contents
-        for test_short in contents:
-            test_path = os.path.join(args.datadir, test_short)
-            # If this one is a match
-            if os.path.isdir(test_path) and \
-                    test_short.endswith(args.source):
-                # If there has not been a match
-                if source_dir is None:
-                    source_dir = test_path
-                else:
-                    raise Exception(f'Found multiple matches ending in "{args.source}" in parent directory "{args.datadir}"')
-        # Check for a failed match
-        if source_dir is None:
-            raise Exception(f'Found no matches ending in "{args.source}" in parent directory "{args.datadir}"')
-        elif not args.quiet:
-            print('Found matching data source: ' + source_dir)
-    # No source was found
-    else:
-        raise Exception(f'Source directory not found.  Did you forget to specify -d?')
-
-    # OK, we've got a source directory, check for prior post1 results
-    target_dir = os.path.join(source_dir, target)
-    # If it already exists
-    if os.path.exists(target_dir):
-        if args.force:
-            if not args.quiet:
-                print('Removing prior post1 results')
-            shutil.rmtree(target_dir)
-        else:
-            raise Exception('Post 1 results already exist. Use -f to overwrite.')
-    os.mkdir(target_dir)
     
     # Build a list of worker arguments that include the source data 
     # files and the target output files
     wargs = []
-    if not args.quiet:
-        print('Found...')
+    contents = os.listdir(source_dir)
+    
     for dfile in os.listdir(source_dir):
         source = os.path.join(source_dir, dfile)
         if os.path.isfile(source) and\
                 dfile.endswith('.dat') and\
                 not dfile.startswith('_'):
-            print('  ' + dfile)
             target,_,_ = dfile.rpartition('.')
             target = os.path.join(target_dir, target+extension)
             wargs.append({'source':source, 'target':target, 'Nwire':args.N, 'quiet':args.quiet})
