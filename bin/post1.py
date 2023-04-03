@@ -17,6 +17,7 @@ import lconfig as lc
 import numpy as np
 import pickle
 import multiprocessing as mp
+import wire
 
 
 target = 'post1'
@@ -38,7 +39,8 @@ MUST contain the following MANDATORY data elements:
     theta_step  The wire angle increment when binning data
     wiredata    An IOstream to the open wire data file
     wdlock      A lock (mutex) for writing to the file
-    quiet       True/False should the function write to stdout?
+    verbose     True/False write status updates to stdout?
+    view        True/False generate a plot of the results?
 """
     source = workerdata['source']
     theta_min = workerdata['theta_min']
@@ -46,39 +48,51 @@ MUST contain the following MANDATORY data elements:
     theta_step = workerdata['theta_step']
     wdf = workerdata['wiredata']
     wdlock = workerdata['wdlock']
-    quiet = workerdata['quiet']
+    verbose_f = workerdata['verbose_f']
+    view_f = workerdata['view']
 
-    if not quiet:
-        print('[' + source + '] starting...')
+
+    if verbose_f:
+        print(f'[{source}] starting.')
         
     conf,data = lc.load(source)
 
     # Extract the wire radii
-    rwire = []
+    wire_r = []
     Nwire = 0
     param = f'r{Nwire}'
     while param in conf.meta_values:
-        rwire.append(conf.meta_values[param])
+        wire_r.append(conf.meta_values[param])
         Nwire += 1
     if Nwire == 0:
-        raise Exception('Data file has no wire radii defined: ' + source)
+        print(f'[{source}] ERROR: no wire radii found in meta parameters', file=sys.stderr)
+        return
     
     # Calculate the number of theta bins
     Ntheta = int((theta_max - theta_min)//theta_step)
-    
-    # Detect the digital input channel
-    dich = int(np.log2(conf.distream))
 
     # We'll use three indexing schemes in this code: 
     #   I - refers to an index in the total raw data set.
     #   J - refers to an index in the down-selected (output) data set
+    #   iwire - wire index
     #   ii - is a general purpose index; useage varies
-
+    # There are NXXX integers that determine the bounds on these indices
+    #   Ndata - number of raw measurements (I index)
+    #   Ntheta - number of theta angle bins
+    #   Nwire - number of wires
+    
+    # Detect the digital input channel
+    dich = int(np.log2(conf.distream))
     # First, establish an array of indices that correspond to edge events
     edges_I = data.get_dievents(dich)
     # Get the current signal
     current = data.get_channel(0)
     Ndata = data.ndata()
+    
+    # Detect the x-, y-, and z-coordinates
+    wire_x = conf.meta_values['x']
+    wire_z = conf.meta_values['z']
+    wire_y = 0.
     
     # The digital signal is nominally high over most of the rotation.
     # It drops when a stripe of dark tape passes under the 
@@ -97,7 +111,11 @@ MUST contain the following MANDATORY data elements:
     #______    __      ____________________    __      ___
     # CCW  |__| >|____|                    |__|  |____|
     # 
-    # The arrows (<, >) mark the wire-1 edge.
+    # The arrows (<, >) mark the wire-0 edge.
+    #
+    # CW rotation is considered "positive" so the wires are in natural 
+    # order (e.g. 0,1,2,3)  If the rotation is CCW, the wires are in 
+    # reverse order (e.g. 0,3,2,1).
     
     # Calculate the number of samples in the intervals between the first
     # five edges (four intervals)
@@ -113,6 +131,10 @@ MUST contain the following MANDATORY data elements:
     else:
         ii = (ii+3)%4
         is_ccw = True
+        # Adjust the wire radius order
+        wire_r.reverse()
+        wire_r.insert(0, r.pop(-1))
+        
     # edges_I[ii] is now the index of the first wire-0 edge
     # is_ccw now indicates the direction of disc rotation. When True
     # the wire order will be reversed
@@ -125,17 +147,18 @@ MUST contain the following MANDATORY data elements:
     edges_dI = np.empty_like(edges_I,dtype=int)
     edges_dI[:-1] = np.diff(edges_I)
     edges_dI[-1] = edges_dI[-2]
-    # If there is greater than 1% variation, there is a problem.
+    # If there is greater than 1% variation, halt - these data are not trustworthy
     if np.max(edges_dI)/np.min(edges_dI) > 1.01:
-        raise Exception('The disc speed varied by more than 1% in file: ' + source)
+        print(f'[{source}] ERROR: The disc speed changes by more than 1%.', file=sys.stderr)
+        return
     # edges_I is now an array of every index corresponding to 0rad of 
     # disc rotation for wire-0.
     # edges_dI is an array of indices with the number of samples between
     # edges (for a single rotation).  The last element has been 
     # duplicated so it is the same length as edges_I.
     
-    # Initialize bins to accumulate a histogram for 
-
+    # Initialize a 2D list of bins bins to accumulate a histogram
+    #   bins[iwire][I]
     bins = [[ [] for _ in range(Ntheta)] for _ in range(Nwire)]
     
     # Before we loop over the bulk of the data, we'll look at data before
@@ -146,13 +169,22 @@ MUST contain the following MANDATORY data elements:
     dI = edges_dI[0]
     # Calculate the angle rotated between each sample
     dtheta = 2*np.pi / dI
+    # If rotation is backwards, dtheta is negative
+    if is_ccw:
+        dtheta = -dtheta
     # Loop through wire indices
     for iwire in range(Nwire):
         # Izero, Imin, and Imax are the data indices where the wire angle
-        # is zero, theta_min, and theta_max.
+        # is zero, theta_min, and theta_max.  
         Izero = I - ((Nwire-iwire)*dI) // Nwire
         Imin = max(0, Izero + int(theta_min / dtheta))
         Imax = max(0, Izero + int(theta_max / dtheta))
+        # If rotation is reversed, reverse the indices
+        if is_ccw:
+            temp = Imin
+            Imin = Imax
+            Imax = temp
+
         # Loop through the individual measurements
         for ii in range(Imin, Imax+1):
             # Calculate the sample angle
@@ -165,11 +197,19 @@ MUST contain the following MANDATORY data elements:
     for I, dI, in zip(edges_I, edges_dI):
         # Calculate the angle rotated between each sample
         dtheta = 2*np.pi / dI
+        # If rotation is backwards, dtheta is negative
+        if is_ccw:
+            dtheta = -dtheta
         # Loop through wire indices
         for iwire in range(Nwire):
             Izero = I + (iwire*dI) // Nwire
             Imin = min(Ndata-1, Izero + int(theta_min / dtheta))
             Imax = min(Ndata-1, Izero + int(theta_max / dtheta))
+            # If rotation is reversed, reverse the indices
+            if is_ccw:
+                temp = Imin
+                Imin = Imax
+                Imax = temp
             # use ii for an iterator over individual indices
             for ii in range( Imin, Imax ):
                 # Calculate the sample angle
@@ -183,6 +223,8 @@ MUST contain the following MANDATORY data elements:
     wire_std = np.empty((Nwire,Ntheta), dtype=float)
     wire_min = np.empty((Nwire,Ntheta), dtype=float)
     wire_max = np.empty((Nwire,Ntheta), dtype=float)
+    wire_count = np.empty((Nwire,Ntheta), dtype=int)
+    wire_theta = np.arange(theta_min+0.5*dtheta, theta_max, dtheta)
     # Calculate statistics on each bin
     for iwire in range(Nwire):
         for J in range(Ntheta):
@@ -191,19 +233,47 @@ MUST contain the following MANDATORY data elements:
             wire_std[iwire,J] = np.std(bins[iwire][J])
             wire_min[iwire,J] = np.min(bins[iwire][J])
             wire_max[iwire,J] = np.max(bins[iwire][J])
-            
-    # Construct an output dictionary
-    wire = {
-        'r':rwire,
-        'theta':np.arange(0.5, Ntheta, 1.0) * dtheta + theta_min,
-        'mean':wire_mean,
-        'median':wire_median,
-        'std':wire_std,
-        'min':wire_min,
-        'max':wire_max,
-    }
-    return wire
+            wire_count[iwire,J] = len(bins[iwire][J])
     
+    # If ordered to make images summarizing the data
+    if view_f:
+        fig,ax = plt.subplots((Nwire,2), sharex=True, squeeze=False, figsize=(3*Nwire,4))
+        stc = (0.2, 0.2, 0.2)
+        for iwire in range(Nwire):
+            # Plot the current statistics
+            ax[iwire,0].fill_between(wire_theta, 
+                    wire_mean+2*wire_std, 
+                    wire_mean-2*wire_std, 
+                    alpha = 0.3, color=stc)
+            ax[iwire,0].plot(wire_theta, wire_max[iwire,:], color=stc)
+            ax[iwire,0].plot(wire_theta, wire_min[iwire,:], color=stc)
+            ax[iwire,0].plot(wire_theta, wire_mean[iwire,:], 'g-')
+            ax[iwire,0].plot(wire_theta, wire_median[iwire,:], 'k-')
+            ax[iwire,0].set_xlabel('Angle (rad)')
+            ax[iwire,0].set_ylabel(f'Current ({data.aich[0].aicalunits})')
+            ax[iwire,0].grid(True)
+            ax[iwire,0].set_title(f'Wire {iwire} Statistics')
+            # Plot the histogram
+            ax[iwire,1].plot(wire_theta, wire_count[iwire,:], linestyle='none', ms='.', mc='k')
+            ax[iwire,1].set_xlabel('Angle (rad)')
+            ax[iwire,1].set_ylabel('Data Count')
+            ax[iwire,1].grid(True)
+            ax[iwire,0].set_title(f'Wire {iwire} Histogram')
+        # Build a file name and save it
+        # Strip off the file extension
+        target,_,_ = source.rpartition('.')
+        target = target + '.png'
+        fig.savefig(target)
+        
+    # Append to the data file
+    wdlock.acquire()
+    try:
+        for iwire in range(Nwire):
+            for J in range(Ntheta):
+                wdf.writeline(wire_r[iwire], wire_x, wire_y, wire_theta[J], wire_median[J])
+    finally:
+        wdlock.release()
+        
 
 # If this is being run as a script
 if __name__ == '__main__':
