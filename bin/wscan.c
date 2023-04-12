@@ -88,8 +88,7 @@ char help_text[] = "wscan [-h] [-c CONFIG] [-d DEST] [-i|f|s PARAM=VALUE] \n"\
 
 int main(int argc, char *argv[]){
     int ch,             // holds the character for the getopt system
-        err,            // error index
-        file_counter;   // index for generating file names
+        err;            // error index
     char config_filename[STR_LEN], 
         dest_directory[STR_LEN],
         slice_directory[STR_LEN],
@@ -98,7 +97,7 @@ int main(int argc, char *argv[]){
         stemp1[STR_SHORT];
     AxisIterator_t xaxis, zaxis;
     double ftemp;
-    int itemp;
+    int itemp, ii;
     
     time_t now;
     struct stat dirstat;
@@ -113,7 +112,7 @@ int main(int argc, char *argv[]){
     while((ch = getopt(argc, argv, "hc:d:i:s:f:")) >= 0){
         switch(ch){
         case 'h':
-            printf(help_text);
+            printf("%s",help_text);
             return 0;
         case 'c':
             strcpy(config_filename, optarg);
@@ -202,7 +201,7 @@ int main(int argc, char *argv[]){
     }
     // Verify that the wire radii are configured
     // wscan doesn't need them, but the post processing codes will
-    for(ii=0; ii<LC_MAX_META; ii++){
+    for(ii=0; ii<LCONF_MAX_META; ii++){
         sprintf(stemp, "r%d", ii);
         if(lc_get_meta_type(&dconf, stemp) == LC_MT_FLT){
             lc_get_meta_flt(&dconf, stemp, &ftemp);
@@ -270,9 +269,10 @@ int main(int argc, char *argv[]){
                     ax_get_pos(&xaxis), 
                     xaxis.units);
             // Record the current z and x indices
-            if( lc_put_meta_int(&dconf, "x", ax_get_pos(&xaxis)) || 
-                    lc_put_meta_int(&dconf, "z", ax_get_pos(&zaxis)) ){
-                fprintf(stderr, "WSCAN: WARNING! Failed to write the xi or zi meta values prior to data acquisition\n");
+            if( lc_put_meta_flt(&dconf, "x", ax_get_pos(&xaxis)) || 
+                    lc_put_meta_flt(&dconf, "y", 0.) ||
+                    lc_put_meta_flt(&dconf, "z", ax_get_pos(&zaxis)) ){
+                fprintf(stderr, "WSCAN: WARNING! Failed to write the (x,y,z) meta values prior to data acquisition\n");
             }
             
             // Read data in a burst configuration: start, service, stop

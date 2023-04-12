@@ -107,9 +107,9 @@ MUST contain the following MANDATORY data elements:
     # Measure out the durations of the first four intervals (5 edges)
     # The longest interval will correspond to the disc transit
     # _____      __    ____________________      __    ___
-    # CW   |____|< |__|                    |____|  |__|
+    # CCW  |____|< |__|                    |____|  |__|
     #______    __      ____________________    __      ___
-    # CCW  |__| >|____|                    |__|  |____|
+    # CW   |__| >|____|                    |__|  |____|
     # 
     # The arrows (<, >) mark the wire-0 edge.
     #
@@ -123,14 +123,14 @@ MUST contain the following MANDATORY data elements:
     # Which of them is the longest?  That's the disc rotation
     ii = np.argmax(edges_dI)
     # Now, compare the durations of the two pulses corresponding to the
-    # dark stripes.  If the first is the longest, the rotation is CW
+    # dark stripes.  If the first is the longest, the rotation is CCW
     if edges_dI[(ii+1)%4] > edges_dI[(ii+3)%4]:
         ii = (ii+2)%4
-        is_ccw = False
-    # Otherwise, the rotation is CCW
+        is_ccw = True
+    # Otherwise, the rotation is CW
     else:
         ii = (ii+3)%4
-        is_ccw = True
+        is_ccw = False
         # Adjust the wire radius order
         wire_r.reverse()
         wire_r.insert(0, r.pop(-1))
