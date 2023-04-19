@@ -12,11 +12,12 @@ postfile = os.path.join(target, '_post.dat')
 # Make the target directory
 os.mkdir(target)
 
+target = os.path.join(target, 'wscan')
+
 # Prompt the user for input
 go_f = True
 while go_f:
-    standoff_in = float(input('Standoff (in):'))
-    zinit_in = float(input('Initial z (in):'))
+    zinit_mm = float(input('Initial z (mm):'))
     print('Are the above entries correct?')
     go_f = not (input('(Y/n):') == 'Y')
 
@@ -26,7 +27,7 @@ os.system('lcburst -c flow.conf -d ' + prefile)
 
 # Run the measurement
 print('Measuring...')
-os.system(f'./wscan -c wscan.conf -d {target} -f standoff_in={standoff_in} -f zini_in={zinit_in}')
+os.system(f'./wscan -c wscan.conf -d {target} -f zinit_mm={zinit_mm}')
 
 # Run the flow measurement
 print('Post-flow measurement')
