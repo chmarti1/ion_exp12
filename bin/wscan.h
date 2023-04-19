@@ -167,11 +167,15 @@ int ax_move(AxisIterator_t *ax, int steps, int wait_us){
     
     // Write to the direction bit
     err = LJM_eWriteName(ax->dconf->handle, ax->dregister, dir);
+    if(err){
+        fprintf(stderr, "AX_MOVE: Failed to set direction pin on %s\n", ax->dregister);
+        return -1;
+    }
     // Send the pulse count
     ax->dconf->efch[ax->efch].counts = psteps;
-    err = err || lc_update_ef(ax->dconf);
+    err = lc_update_ef(ax->dconf);
     if(err){
-        fprintf(stderr, "AX_ITER: Failed to transmit pulse out\n");
+        fprintf(stderr, "AX_MOVE: Failed to transmit pulse out\n");
         return -1;
     }
     
