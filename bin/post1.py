@@ -17,11 +17,13 @@ import lconfig as lc
 import numpy as np
 import pickle
 import multiprocessing as mp
+import matplotlib.pyplot as plt
 import wire
 
 
-target = 'post1'
-extension = '.p1d'
+theta_min = -.1
+theta_max = .1
+theta_step = .003
 
 
 
@@ -49,11 +51,12 @@ MUST contain the following MANDATORY data elements:
     wdf = workerdata['wiredata']
     wdlock = workerdata['wdlock']
     verbose_f = workerdata['verbose_f']
-    view_f = workerdata['view']
+    view_f = workerdata['view_f']
+
 
 
     if verbose_f:
-        print(f'[{source}] starting.')
+        print(f'[{source}] loading')
         
     conf,data = lc.load(source)
 
@@ -64,12 +67,14 @@ MUST contain the following MANDATORY data elements:
     while param in conf.meta_values:
         wire_r.append(conf.meta_values[param])
         Nwire += 1
+        param = f'r{Nwire}'
     if Nwire == 0:
         print(f'[{source}] ERROR: no wire radii found in meta parameters', file=sys.stderr)
         return
     
     # Calculate the number of theta bins
-    Ntheta = int((theta_max - theta_min)//theta_step)
+    wire_theta = np.arange(theta_min+0.5*theta_step, theta_max, theta_step)
+    Ntheta = len(wire_theta)
 
     # We'll use three indexing schemes in this code: 
     #   I - refers to an index in the total raw data set.
@@ -156,6 +161,10 @@ MUST contain the following MANDATORY data elements:
     # edges_dI is an array of indices with the number of samples between
     # edges (for a single rotation).  The last element has been 
     # duplicated so it is the same length as edges_I.
+
+    if verbose_f:
+        print(f'[{source}] x={wire_x}, y={wire_y}, z={wire_z}, ccw={is_ccw}')
+        print(f'    radii: {wire_r}')
     
     # Initialize a 2D list of bins bins to accumulate a histogram
     #   bins[iwire][I]
@@ -172,6 +181,7 @@ MUST contain the following MANDATORY data elements:
     # If rotation is backwards, dtheta is negative
     if is_ccw:
         dtheta = -dtheta
+    
     # Loop through wire indices
     for iwire in range(Nwire):
         # Izero, Imin, and Imax are the data indices where the wire angle
@@ -186,7 +196,7 @@ MUST contain the following MANDATORY data elements:
             Imax = temp
 
         # Loop through the individual measurements
-        for ii in range(Imin, Imax+1):
+        for ii in range(Imin, Imax):
             # Calculate the sample angle
             theta = (ii-Izero) * dtheta
             # Where does this sample belong?
@@ -218,59 +228,63 @@ MUST contain the following MANDATORY data elements:
                 J = int(np.floor((theta - theta_min)/theta_step))
                 bins[iwire][J].append(current[ii])
     
-    wire_mean = np.empty((Nwire,Ntheta), dtype=float)
-    wire_median = np.empty((Nwire,Ntheta), dtype=float)
-    wire_std = np.empty((Nwire,Ntheta), dtype=float)
-    wire_min = np.empty((Nwire,Ntheta), dtype=float)
-    wire_max = np.empty((Nwire,Ntheta), dtype=float)
-    wire_count = np.empty((Nwire,Ntheta), dtype=int)
-    wire_theta = np.arange(theta_min+0.5*dtheta, theta_max, dtheta)
+    wire_mean = np.zeros((Nwire,Ntheta), dtype=float)
+    wire_median = np.zeros((Nwire,Ntheta), dtype=float)
+    wire_std = np.zeros((Nwire,Ntheta), dtype=float)
+    wire_min = np.zeros((Nwire,Ntheta), dtype=float)
+    wire_max = np.zeros((Nwire,Ntheta), dtype=float)
+    wire_count = np.zeros((Nwire,Ntheta), dtype=int)
     # Calculate statistics on each bin
     for iwire in range(Nwire):
         for J in range(Ntheta):
-            wire_mean[iwire,J] = np.mean(bins[iwire][J])
-            wire_median[iwire,J] = np.median(bins[iwire][J])
-            wire_std[iwire,J] = np.std(bins[iwire][J])
-            wire_min[iwire,J] = np.min(bins[iwire][J])
-            wire_max[iwire,J] = np.max(bins[iwire][J])
             wire_count[iwire,J] = len(bins[iwire][J])
+            if(bins[iwire][J]):
+                wire_mean[iwire,J] = np.mean(bins[iwire][J])
+                wire_median[iwire,J] = np.median(bins[iwire][J])
+                wire_std[iwire,J] = np.std(bins[iwire][J])
+                wire_min[iwire,J] = np.min(bins[iwire][J])
+                wire_max[iwire,J] = np.max(bins[iwire][J])
+
     
     # If ordered to make images summarizing the data
     if view_f:
-        fig,ax = plt.subplots((Nwire,2), sharex=True, squeeze=False, figsize=(3*Nwire,4))
+        if verbose_f:
+            print(f'[{source}] plotting')
+        fig,ax = plt.subplots(Nwire,2, sharex=True, squeeze=False, figsize=(18,3*Nwire))
         stc = (0.2, 0.2, 0.2)
         for iwire in range(Nwire):
             # Plot the current statistics
             ax[iwire,0].fill_between(wire_theta, 
-                    wire_mean+2*wire_std, 
-                    wire_mean-2*wire_std, 
+                    wire_mean[iwire,:]+2*wire_std[iwire,:], 
+                    wire_mean[iwire,:]-2*wire_std[iwire,:], 
                     alpha = 0.3, color=stc)
             ax[iwire,0].plot(wire_theta, wire_max[iwire,:], color=stc)
             ax[iwire,0].plot(wire_theta, wire_min[iwire,:], color=stc)
             ax[iwire,0].plot(wire_theta, wire_mean[iwire,:], 'g-')
             ax[iwire,0].plot(wire_theta, wire_median[iwire,:], 'k-')
             ax[iwire,0].set_xlabel('Angle (rad)')
-            ax[iwire,0].set_ylabel(f'Current ({data.aich[0].aicalunits})')
+            ax[iwire,0].set_ylabel(f'Current ({data.config.aich[0].aicalunits})')
             ax[iwire,0].grid(True)
             ax[iwire,0].set_title(f'Wire {iwire} Statistics')
             # Plot the histogram
-            ax[iwire,1].plot(wire_theta, wire_count[iwire,:], linestyle='none', ms='.', mc='k')
+            ax[iwire,1].plot(wire_theta, wire_count[iwire,:], linestyle='none', marker='.', mfc='k', mec='k')
             ax[iwire,1].set_xlabel('Angle (rad)')
             ax[iwire,1].set_ylabel('Data Count')
             ax[iwire,1].grid(True)
-            ax[iwire,0].set_title(f'Wire {iwire} Histogram')
+            ax[iwire,1].set_title(f'Wire {iwire} Histogram')
         # Build a file name and save it
         # Strip off the file extension
         target,_,_ = source.rpartition('.')
         target = target + '.png'
         fig.savefig(target)
+        plt.close(fig)
         
     # Append to the data file
     wdlock.acquire()
     try:
         for iwire in range(Nwire):
             for J in range(Ntheta):
-                wdf.writeline(wire_r[iwire], wire_x, wire_y, wire_theta[J], wire_median[J])
+                wdf.writeline(wire_r[iwire], wire_x, wire_y, wire_theta[J], wire_median[iwire,J])
     finally:
         wdlock.release()
         
@@ -289,14 +303,6 @@ raw data collected from the Langmuir probe are wire current and a
 digital photo-reflector signal.  The first post processing step 
 translates these from a time series of current measurements into current
 versus disc angle.
-
-Since data directories are usually long timestamps, post1 also allows
-the source to be specified by the trailing characters of the source when
-the -d option is also set to a parent directory in which to look.
-This example will look in the directory, ../data for a data directory
-that ends in the digits 3715:
-    $ post1.py -d ../data 3715
-If multiple matches are found, an error is raised.
 
 Source data files must have a ".dat" extension, and they must be lconfig
 data with an analog input and a digital input stream channel.  Files 
@@ -322,12 +328,17 @@ the disc.
 """)
     parser.add_argument('source',
             help='The directory containing .dat files from a scan',
-            default=None)
+            type=str)
             
     parser.add_argument('-f', '--force', 
             dest='force',
             help='Force overwriting prior post1 results',
             action='store_true')
+
+    parser.add_argument('-o', '--output',
+            dest='output',
+            help='Output file',
+            default=None)
             
     parser.add_argument('-c',
             dest='cpus',
@@ -339,43 +350,81 @@ the disc.
             dest='quiet',
             help='Operate quietly; do not print to stdout',
             action='store_true')
-            
-    parser.add_argument('-d',
-            dest='datadir',
-            default=None,
-            help='Parent directory to search for data directories')
+
+    parser.add_argument('-v', '--view', 
+            dest='view',
+            help='Generate plots of the wire data',
+            action='store_true')
             
     args = parser.parse_args()
+    
+    # If the output file was not explicitly specified, generate it
+    if args.output is None:
+        args.output = os.path.join(args.source, 'output.wdf')
+    # Does the output file already exist?
+    if os.path.isfile(args.output):
+        if args.force:
+            if not args.quiet:
+                print('Warning: File exists - overwriting ' + args.output)
+        else:
+            raise Exception('(-f to override) File exists: ' + args.output)
     
     # Build a list of worker arguments that include the source data 
     # files and the target output files
     wargs = []
-    contents = os.listdir(source_dir)
-    
-    for dfile in os.listdir(source_dir):
-        source = os.path.join(source_dir, dfile)
-        if os.path.isfile(source) and\
-                dfile.endswith('.dat') and\
-                not dfile.startswith('_'):
-            target,_,_ = dfile.rpartition('.')
-            target = os.path.join(target_dir, target+extension)
-            wargs.append({'source':source, 'target':target, 'Nwire':args.N, 'quiet':args.quiet})
-        
-    # If there is only one worker allowed at a time, do not use multiprocessing
-    if args.cpus==1:
-        for ww in wargs:
-            post1(**ww)
-    else:
-        # First, determine the number of processes and the number of arguments
-        cpus = min(mp.cpu_count(), len(wargs))
-        if args.cpus > cpus:
-            if not args.quiet:
-                print(f'Truncating the number of CPUs to {cpus}.')
-        else:
-            cpus = args.cpus
+
+    # Create a lock for writing to the data file
+    wdlock = mp.Lock()
+
+    # Open the output file
+    with wire.WireData(args.output).open('w') as wdf:
+        # Loop over all data files
+        for dfile in os.listdir(args.source):
+            # Establish the path to the current file
+            source = os.path.join(args.source, dfile)
+            # If this file is a data file (not marked for exclusion
+            if os.path.isfile(source) and\
+                    dfile.endswith('.dat') and\
+                    not dfile.startswith('_'):
+                # Build an arguments dictionary for this file
+                this_warg = {
+                        'source':source, 
+                        'theta_min':theta_min,
+                        'theta_max':theta_max,
+                        'theta_step':theta_step,
+                        'wiredata':wdf,
+                        'wdlock':wdlock,
+                        'verbose_f':not args.quiet,
+                        'view_f':args.view}
+                wargs.append(this_warg)
             
-        with mp.Pool(cpus) as p:
+        # If there is only one worker allowed at a time, do not use multiprocessing
+        if args.cpus==1:
             for ww in wargs:
-                p.apply_async(post1, (), ww)
-            p.close()
-            p.join()
+                post1(ww)
+        else:
+            # First, determine the number of processes and the number of arguments
+            cpus = min(args.cpus, mp.cpu_count())
+            if not args.quiet:
+                print(f'Spawning {cpus} workers.')
+                
+            # Create a wrapper to call post1
+            def worker(*args):
+                for a in args:
+                    post1(a)
+            
+            procs = []
+            
+            breaks = np.linspace(0,len(wargs),cpus+1)
+            start = 0
+            for c in range(cpus):
+                stop = int(round(breaks[c+1]))
+                p = mp.Process(target=worker, args=wargs[start:stop])
+                p.start()
+                procs.append(p)
+                start = stop
+                
+                
+            for p in procs:
+                p.join()
+                
