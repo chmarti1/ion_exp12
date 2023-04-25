@@ -23,7 +23,7 @@ import wire
 
 theta_min = -.1
 theta_max = .1
-theta_step = .003
+theta_step = .0015
 
 
 
@@ -130,32 +130,33 @@ MUST contain the following MANDATORY data elements:
     # Now, compare the durations of the two pulses corresponding to the
     # dark stripes.  If the first is the longest, the rotation is CCW
     if edges_dI[(ii+1)%4] > edges_dI[(ii+3)%4]:
-        ii = (ii+2)%4
         is_ccw = True
+        # Find the first wire-0 edge
+        ii = (ii+2)%4
+        # CCW is "backwards" so we'll index through the data backwards
+        current = np.flip(current)
+        # Downselect the edges to include only wire-0 edges
+        # Reflect the index by Ndata to 
+        edges_I = Ndata - 1 - np.flip(edges_I[ii::4])
     # Otherwise, the rotation is CW
     else:
-        ii = (ii+3)%4
         is_ccw = False
-        # Adjust the wire radius order
-        wire_r.reverse()
-        wire_r.insert(0, r.pop(-1))
+        # Find the first wire-0 edge
+        ii = (ii+3)%4
+        # Downselect the edges to include only wire-0 edges
+        edges_I = edges_I[ii::4]
         
-    # edges_I[ii] is now the index of the first wire-0 edge
-    # is_ccw now indicates the direction of disc rotation. When True
-    # the wire order will be reversed
+    # edges_I is now an ascending array of indices where the wire-0 was
+    # at zero degrees.
     
-    # (2) Starting at edges_I[ii], downselect all the edges to isolate 
-    # only the wire-0 edges.  Then, calculate the duration between the 
-    # edges to establish disc speed during the transits.
-    edges_I = edges_I[ii::4]
     # Calculate the samples between complete rotations.
     edges_dI = np.empty_like(edges_I,dtype=int)
     edges_dI[:-1] = np.diff(edges_I)
     edges_dI[-1] = edges_dI[-2]
     # If there is greater than 1% variation, halt - these data are not trustworthy
     if np.max(edges_dI)/np.min(edges_dI) > 1.01:
-        print(f'[{source}] ERROR: The disc speed changes by more than 1%.', file=sys.stderr)
-        return
+        print(f'[{source}] WARNING: The disc speed changes by more than 1%.', file=sys.stderr)
+
     # edges_I is now an array of every index corresponding to 0rad of 
     # disc rotation for wire-0.
     # edges_dI is an array of indices with the number of samples between
@@ -178,22 +179,17 @@ MUST contain the following MANDATORY data elements:
     dI = edges_dI[0]
     # Calculate the angle rotated between each sample
     dtheta = 2*np.pi / dI
-    # If rotation is backwards, dtheta is negative
-    if is_ccw:
-        dtheta = -dtheta
     
     # Loop through wire indices
     for iwire in range(Nwire):
-        # Izero, Imin, and Imax are the data indices where the wire angle
-        # is zero, theta_min, and theta_max.  
-        Izero = I - ((Nwire-iwire)*dI) // Nwire
-        Imin = max(0, Izero + int(theta_min / dtheta))
-        Imax = max(0, Izero + int(theta_max / dtheta))
-        # If rotation is reversed, reverse the indices
-        if is_ccw:
-            temp = Imin
-            Imin = Imax
-            Imax = temp
+        # Find the index where this wire is at zero radians
+        Izero = I + ((iwire-Nwire)*dI) // Nwire
+        # Find indices where the wire is in range
+        Imin = Izero + int(np.ceil(theta_min / dtheta))
+        Imax = Izero + int(np.ceil(theta_max / dtheta))
+        # Clip the indices at zero
+        Imin = max(0, Imin)
+        Imax = max(0, Imax)
 
         # Loop through the individual measurements
         for ii in range(Imin, Imax):
@@ -201,31 +197,34 @@ MUST contain the following MANDATORY data elements:
             theta = (ii-Izero) * dtheta
             # Where does this sample belong?
             J = int(np.floor((theta - theta_min)/theta_step))
+            # Force J to be in range
+            J = min(J, Ntheta-1)
             bins[iwire][J].append(current[ii])
     
     # Next, loop through the other rotations
     for I, dI, in zip(edges_I, edges_dI):
         # Calculate the angle rotated between each sample
         dtheta = 2*np.pi / dI
-        # If rotation is backwards, dtheta is negative
-        if is_ccw:
-            dtheta = -dtheta
         # Loop through wire indices
         for iwire in range(Nwire):
+            # Find the index where this wire is at zero radians
             Izero = I + (iwire*dI) // Nwire
-            Imin = min(Ndata-1, Izero + int(theta_min / dtheta))
-            Imax = min(Ndata-1, Izero + int(theta_max / dtheta))
-            # If rotation is reversed, reverse the indices
-            if is_ccw:
-                temp = Imin
-                Imin = Imax
-                Imax = temp
+            # Find the indices where the wire is in range
+            Imin = Izero + int(np.ceil(theta_min / dtheta))
+            Imax = Izero + int(np.ceil(theta_max / dtheta))
+            
+            # Clip the data by the end of the data set
+            Imin = min(Ndata, Imin)
+            Imax = min(Ndata, Imax)
+            
             # use ii for an iterator over individual indices
             for ii in range( Imin, Imax ):
                 # Calculate the sample angle
                 theta = (ii-Izero) * dtheta
                 # Where does this sample belong?
                 J = int(np.floor((theta - theta_min)/theta_step))
+                # Force J to be in range
+                J = min(J, Ntheta-1)
                 bins[iwire][J].append(current[ii])
     
     wire_mean = np.zeros((Nwire,Ntheta), dtype=float)
