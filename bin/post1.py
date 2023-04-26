@@ -18,6 +18,7 @@ import numpy as np
 import pickle
 import multiprocessing as mp
 import matplotlib.pyplot as plt
+import matplotlib as mpl
 import wire
 
 
@@ -52,6 +53,7 @@ MUST contain the following MANDATORY data elements:
     wdlock = workerdata['wdlock']
     verbose_f = workerdata['verbose_f']
     view_f = workerdata['view_f']
+    ignore = workerdata['ignore']
 
 
 
@@ -61,15 +63,25 @@ MUST contain the following MANDATORY data elements:
     conf,data = lc.load(source)
 
     # Extract the wire radii
-    wire_r = []
-    Nwire = 0
-    param = f'r{Nwire}'
-    while param in conf.meta_values:
-        wire_r.append(conf.meta_values[param])
-        Nwire += 1
-        param = f'r{Nwire}'
+    maxNwire = 12       # Maximum allowed wires
+    wire_r = []         # A record of all wire radii
+    Nwire = -1          # number of wires discovered
+    for ii in range(maxNwire):
+        # Build the meta parameter name that SHOULD specify this wire's radius
+        param = f'r{ii}'
+        # If it exists, grab the radius
+        if param in conf.meta_values:
+            wire_r.append(conf.meta_values[param])
+        # If the wire meta parameter is NOT found, stop searching
+        else:
+            Nwire = ii
+            break
+    
     if Nwire == 0:
         print(f'[{source}] ERROR: no wire radii found in meta parameters', file=sys.stderr)
+        return
+    elif Nwire < 0:
+        print(f'[{source}] ERROR: more than {maxNwire} radii found in meta parameters', file=sys.stderr)
         return
     
     # Calculate the number of theta bins
@@ -247,6 +259,7 @@ MUST contain the following MANDATORY data elements:
     
     # If ordered to make images summarizing the data
     if view_f:
+        mpl.use('agg')
         if verbose_f:
             print(f'[{source}] plotting')
         fig,ax = plt.subplots(Nwire,2, sharex=True, squeeze=False, figsize=(18,3*Nwire))
@@ -264,7 +277,10 @@ MUST contain the following MANDATORY data elements:
             ax[iwire,0].set_xlabel('Angle (rad)')
             ax[iwire,0].set_ylabel(f'Current ({data.config.aich[0].aicalunits})')
             ax[iwire,0].grid(True)
-            ax[iwire,0].set_title(f'Wire {iwire} Statistics')
+            if iwire in ignore:
+                ax[iwire,0].set_title(f'Wire {iwire} Statistics - IGNORED')
+            else:
+                ax[iwire,0].set_title(f'Wire {iwire} Statistics')
             # Plot the histogram
             ax[iwire,1].plot(wire_theta, wire_count[iwire,:], linestyle='none', marker='.', mfc='k', mec='k')
             ax[iwire,1].set_xlabel('Angle (rad)')
@@ -279,11 +295,17 @@ MUST contain the following MANDATORY data elements:
         plt.close(fig)
         
     # Append to the data file
+    print(f'[{source}] Writing to output')
     wdlock.acquire()
     try:
         for iwire in range(Nwire):
-            for J in range(Ntheta):
-                wdf.writeline(wire_r[iwire], wire_x, wire_y, wire_theta[J], wire_median[iwire,J])
+            # If the index is not to be ignored, include it
+            if iwire not in ignore:
+                for J in range(Ntheta):
+                    wdf.writeline(wire_r[iwire], wire_x, wire_y, wire_theta[J], wire_median[iwire,J])
+            # Let the user know we're ignoring a wire
+            elif verbose_f:
+                print(f'[{source}] NOTICE: ignoring wire {iwire}')
     finally:
         wdlock.release()
         
@@ -293,7 +315,7 @@ if __name__ == '__main__':
     
     # Set up argument parsing
     parser = argparse.ArgumentParser(
-            prog='ion_exp12/bin/post1.py',
+            prog='post1.py',
             description='Langmuir probe post processing step 1',
             formatter_class=argparse.RawDescriptionHelpFormatter,
             epilog=\
@@ -336,10 +358,10 @@ the disc.
 
     parser.add_argument('-o', '--output',
             dest='output',
-            help='Output file',
+            help='Override the default output file - output.wdf',
             default=None)
             
-    parser.add_argument('-c',
+    parser.add_argument('-c', '--cpus',
             dest='cpus',
             type=int,
             default=1,
@@ -349,6 +371,12 @@ the disc.
             dest='quiet',
             help='Operate quietly; do not print to stdout',
             action='store_true')
+
+    parser.add_argument('-i', '--ignore',
+            dest='ignore',
+            help='Comma-separated list of wire indexes to ignore in the analysis; e.g. "1,2"',
+            type=str,
+            default=None)
 
     parser.add_argument('-v', '--view', 
             dest='view',
@@ -368,6 +396,11 @@ the disc.
         else:
             raise Exception('(-f to override) File exists: ' + args.output)
     
+    # Parse the ignore list (these are wires that will not be analyzed)
+    ignore = []
+    if args.ignore:
+        ignore = [int(this) for this in args.ignore.split(',')]
+        
     # Build a list of worker arguments that include the source data 
     # files and the target output files
     wargs = []
@@ -394,7 +427,8 @@ the disc.
                         'wiredata':wdf,
                         'wdlock':wdlock,
                         'verbose_f':not args.quiet,
-                        'view_f':args.view}
+                        'view_f':args.view,
+                        'ignore':ignore}
                 wargs.append(this_warg)
             
         # If there is only one worker allowed at a time, do not use multiprocessing
